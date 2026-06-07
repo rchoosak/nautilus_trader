@@ -155,6 +155,19 @@ def test_risk_based_lots_eurusd() -> None:
     assert lots == Decimal("2.00")
 
 
+def test_risk_based_lots_explicit_pip_size() -> None:
+    gold = mt5_fx_instrument("XAUUSD")  # digits 3, contract 100
+    # 1% of 100k = 1000 risk; 200 pips x pip 0.01 = $2 stop x 100 contract = 200/lot -> 5 lots.
+    lots = risk_based_lots(
+        100_000.0,
+        risk_pct=1.0,
+        stop_pips=200.0,
+        instrument=gold,
+        pip_size=0.01,
+    )
+    assert lots == Decimal("5.00")
+
+
 def test_risk_based_lots_jpy_pip_and_min_clamp() -> None:
     usdjpy = mt5_fx_instrument("USDJPY")  # pip = 0.01
     assert risk_based_lots(100_000.0, risk_pct=1.0, stop_pips=50.0, instrument=usdjpy) == Decimal("0.02")

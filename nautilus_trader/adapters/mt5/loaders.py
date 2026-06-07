@@ -176,6 +176,7 @@ def risk_based_lots(
     risk_pct: float,
     stop_pips: float,
     instrument: CurrencyPair,
+    pip_size: float | None = None,
 ) -> Decimal:
     """
     Compute a position size (in lots) that risks ``risk_pct`` of ``equity``.
@@ -184,10 +185,13 @@ def risk_based_lots(
     ``lots = (equity * risk_pct/100) / (stop_pips * pip_size * contract_size)``, then floored
     to the instrument volume step and clamped to its minimum. Assumes the quote currency
     matches the account currency (typical for FX pairs quoted in the account currency).
+
+    ``pip_size`` is the price value of one pip; when not given it defaults to
+    ``price_increment * 10`` (e.g. 0.0001 for 5-digit FX, 0.01 for 3-digit gold).
     """
-    pip_size = Decimal(str(instrument.price_increment)) * Decimal(10)
+    pip = Decimal(str(pip_size)) if pip_size is not None else Decimal(str(instrument.price_increment)) * Decimal(10)
     contract_size = Decimal(str(instrument.multiplier))
-    stop = Decimal(str(stop_pips)) * pip_size
+    stop = Decimal(str(stop_pips)) * pip
 
     denominator = stop * contract_size
     if denominator <= 0:

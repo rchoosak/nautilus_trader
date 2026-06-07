@@ -40,6 +40,8 @@ lot size on every entry from the current account equity:
     MT5_TRADE_SIZE=risk:1%   # risk 1% of current equity per trade
     MT5_RISK_STOP_PIPS=50    # stop-loss distance in pips (default 50)
     MT5_TP_RR=2              # optional take-profit as a risk-reward multiple (default 0 = none)
+    MT5_LEVERAGE=100         # account leverage, e.g. 1:100 (default 100)
+    MT5_PIP_SIZE=0.01        # price value of one pip (default price_increment*10; gold 0.01 = 100 pips/$1)
 """
 
 import os
@@ -88,6 +90,7 @@ class MT5RiskEMACrossConfig(StrategyConfig, frozen=True):
     fixed_size: Decimal | None = None
     account_currency: str = "USD"
     tp_rr: float = 0.0
+    pip_size: float | None = None  # explicit price per pip; default = price_increment * 10
 
 
 class MT5RiskEMACross(Strategy):
@@ -113,7 +116,7 @@ class MT5RiskEMACross(Strategy):
             self.stop()
             return
 
-        self._pip_size = float(self.instrument.price_increment) * 10.0
+        self._pip_size = self.config.pip_size or float(self.instrument.price_increment) * 10.0
         self.register_indicator_for_bars(self.config.bar_type, self.fast_ema)
         self.register_indicator_for_bars(self.config.bar_type, self.slow_ema)
         self.subscribe_bars(self.config.bar_type)
@@ -179,6 +182,7 @@ class MT5RiskEMACross(Strategy):
                         risk_pct=config.risk_pct,
                         stop_pips=config.stop_pips,
                         instrument=self.instrument,
+                        pip_size=self._pip_size,
                     )
         if config.fixed_size is not None:
             return config.fixed_size
@@ -275,6 +279,7 @@ def main() -> None:
         account_type=AccountType.MARGIN,
         base_currency=currency,
         starting_balances=[Money(balance, currency)],
+        default_leverage=Decimal(os.getenv("MT5_LEVERAGE", "100")),  # e.g. 1:100
         fill_model=FillModel(prob_slippage=0.5, random_seed=42),
     )
 
@@ -282,6 +287,8 @@ def main() -> None:
 
     risk_pct, fixed_size = parse_trade_size_spec(os.getenv("MT5_TRADE_SIZE", "0.10"))
     stop_pips = float(os.getenv("MT5_RISK_STOP_PIPS", "50"))
+    pip_env = os.getenv("MT5_PIP_SIZE")
+    pip_size = float(pip_env) if pip_env else None
     if risk_pct is not None:
         print(f"Sizing: risk {risk_pct}% of equity per trade, stop {stop_pips} pips")
     else:
@@ -298,6 +305,7 @@ def main() -> None:
             fixed_size=fixed_size,
             account_currency=str(currency),
             tp_rr=float(os.getenv("MT5_TP_RR", "0")),
+            pip_size=pip_size,
         ),
     )
     engine.add_strategy(strategy=strategy)
