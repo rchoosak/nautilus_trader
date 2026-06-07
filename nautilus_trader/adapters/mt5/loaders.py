@@ -244,9 +244,11 @@ def load_dukascopy_quote_ticks(
     if missing:
         raise ValueError(f"Tick data missing required columns {sorted(missing)}")
 
-    keep = [c for c in ("bid", "ask", "bid_size", "ask_size") if c in df.columns]
+    # Use a large synthetic top-of-book size (the wrangler's ``default_volume``) rather than
+    # Dukascopy's indicative tick volume, so market orders always fill in a backtest. This
+    # mirrors the live adapter's ``market_depth_size`` (MT5 ticks carry no real depth).
     wrangler = QuoteTickDataWrangler(instrument=instrument)
-    return wrangler.process(df[keep], default_volume=default_volume)
+    return wrangler.process(df[["bid", "ask"]], default_volume=default_volume)
 
 
 def load_dukascopy_bars(
