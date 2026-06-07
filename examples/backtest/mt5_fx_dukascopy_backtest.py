@@ -24,7 +24,9 @@ data, set one of the following environment variables to a local file (CSV or Par
 
 Optionally set MT5_SYMBOL (default EURUSD when a file is supplied, AUDUSD for the sample).
 Metals such as XAUUSD are supported automatically; for any other CFD set MT5_DIGITS and
-MT5_CONTRACT_SIZE to match the broker's contract.
+MT5_CONTRACT_SIZE to match the broker's contract. When backtesting from one-sided Dukascopy
+bars, ASK bars are synthesized from the BID bars using MT5_SPREAD_PIPS (default 2) so the
+simulated venue can fill orders; for a realistic spread use tick data instead.
 
 Account and strategy sizing can also be overridden via environment variables:
 
@@ -206,6 +208,23 @@ def _make_instrument(symbol: str):
     )
 
 
+def _shift_bars(bars: list[Bar], instrument, bar_type: BarType, offset: float) -> list[Bar]:
+    # Build a parallel bar series offset by ``offset`` (used to synthesise ASK bars).
+    return [
+        Bar(
+            bar_type=bar_type,
+            open=instrument.make_price(float(bar.open) + offset),
+            high=instrument.make_price(float(bar.high) + offset),
+            low=instrument.make_price(float(bar.low) + offset),
+            close=instrument.make_price(float(bar.close) + offset),
+            volume=bar.volume,
+            ts_event=bar.ts_event,
+            ts_init=bar.ts_init,
+        )
+        for bar in bars
+    ]
+
+
 def _build_data(engine: BacktestEngine):
     ticks_file = os.getenv("MT5_DUKASCOPY_TICKS")
     bars_file = os.getenv("MT5_DUKASCOPY_BARS")
@@ -214,10 +233,15 @@ def _build_data(engine: BacktestEngine):
         symbol = os.getenv("MT5_SYMBOL", "EURUSD")
         instrument = _make_instrument(symbol)
         engine.add_instrument(instrument)
-        bar_type = BarType.from_str(f"{instrument.id}-1-MINUTE-BID-EXTERNAL")
-        bars = load_dukascopy_bars(bars_file, bar_type=bar_type, instrument=instrument)
-        engine.add_data(bars)
-        return instrument, bar_type
+        bid_bar_type = BarType.from_str(f"{instrument.id}-1-MINUTE-BID-EXTERNAL")
+        bid_bars = load_dukascopy_bars(bars_file, bar_type=bid_bar_type, instrument=instrument)
+        engine.add_data(bid_bars)
+        # Dukascopy candles are one-sided, but the simulated venue needs both bid and ask to
+        # fill orders. Synthesize ASK bars from the BID bars plus a configurable spread.
+        spread = float(os.getenv("MT5_SPREAD_PIPS", "2")) * (float(instrument.price_increment) * 10)
+        ask_bar_type = BarType.from_str(f"{instrument.id}-1-MINUTE-ASK-EXTERNAL")
+        engine.add_data(_shift_bars(bid_bars, instrument, ask_bar_type, spread))
+        return instrument, bid_bar_type
 
     if ticks_file:
         symbol = os.getenv("MT5_SYMBOL", "EURUSD")
