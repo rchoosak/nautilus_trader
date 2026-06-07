@@ -27,6 +27,9 @@ from nautilus_trader.adapters.mt5.data import MT5DataClient
 from nautilus_trader.adapters.mt5.execution import MT5ExecutionClient
 from nautilus_trader.adapters.mt5.factories import MT5LiveDataClientFactory
 from nautilus_trader.adapters.mt5.factories import MT5LiveExecClientFactory
+from nautilus_trader.adapters.mt5.loaders import load_dukascopy_bars
+from nautilus_trader.adapters.mt5.loaders import load_dukascopy_quote_ticks
+from nautilus_trader.adapters.mt5.loaders import mt5_fx_instrument
 from nautilus_trader.adapters.mt5.providers import MT5InstrumentProvider
 
 
@@ -43,5 +46,8 @@ __all__ = [
     "MT5LiveDataClientFactory",
     "MT5LiveExecClientFactory",
     "MT5TerminalBridge",
+    "load_dukascopy_bars",
+    "load_dukascopy_quote_ticks",
+    "mt5_fx_instrument",
 ]
 
