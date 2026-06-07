@@ -22,6 +22,10 @@ data, set one of the following environment variables to a local file (CSV or Par
     MT5_DUKASCOPY_TICKS=/path/to/EURUSD_ticks.csv   # Gmt time, Ask, Bid, AskVolume, BidVolume
     MT5_DUKASCOPY_BARS=/path/to/EURUSD_m1.csv       # Gmt time, Open, High, Low, Close, Volume
 
+Prefer TICKS for realistic execution: orders fill against the real bid/ask and the EMA
+signal is aggregated internally at MT5_BAR_SPEC (default "1-MINUTE-BID-INTERNAL"). BARS are
+one-sided (ASK is synthesized) and fill less realistically.
+
 Optionally set MT5_SYMBOL (default EURUSD when a file is supplied, AUDUSD for the sample).
 Metals such as XAUUSD are supported automatically; for any other CFD set MT5_DIGITS and
 MT5_CONTRACT_SIZE to match the broker's contract. When backtesting from one-sided Dukascopy
@@ -247,13 +251,17 @@ def _build_data(engine: BacktestEngine):
         engine.add_data(_shift_bars(bid_bars, instrument, ask_bar_type, spread))
         return instrument, bid_bar_type
 
+    # Tick execution (recommended): orders fill against the real bid/ask ticks, while the
+    # EMA signal is aggregated internally from those ticks at MT5_BAR_SPEC (default 1-minute).
+    signal_spec = os.getenv("MT5_BAR_SPEC", "1-MINUTE-BID-INTERNAL")
+
     if ticks_file:
         symbol = os.getenv("MT5_SYMBOL", "EURUSD")
         instrument = _make_instrument(symbol)
         engine.add_instrument(instrument)
         ticks = load_dukascopy_quote_ticks(ticks_file, instrument=instrument)
         engine.add_data(ticks)
-        bar_type = BarType.from_str(f"{instrument.id}-100-TICK-MID-INTERNAL")
+        bar_type = BarType.from_str(f"{instrument.id}-{signal_spec}")
         return instrument, bar_type
 
     # Fallback: bundled sample ticks so the script runs offline out-of-the-box.
@@ -263,7 +271,7 @@ def _build_data(engine: BacktestEngine):
     sample = TestDataProvider().read_csv_ticks("truefx/audusd-ticks.csv")
     ticks = load_dukascopy_quote_ticks(sample, instrument=instrument)
     engine.add_data(ticks)
-    bar_type = BarType.from_str(f"{instrument.id}-100-TICK-MID-INTERNAL")
+    bar_type = BarType.from_str(f"{instrument.id}-{signal_spec}")
     return instrument, bar_type
 
 
