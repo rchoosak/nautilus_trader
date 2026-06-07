@@ -39,6 +39,7 @@ Download a month of EURUSD 1-minute bars (aggregated from ticks) as parquet::
 from __future__ import annotations
 
 import lzma
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -252,10 +253,10 @@ def _to_epoch_ms(dt: datetime) -> int:
 # -------------------------------------------------------------------------------------------------
 
 
-def _http_get(url: str, *, retries: int = 3, timeout: float = 30.0) -> bytes | None:
+def _http_get(url: str, *, retries: int = 5, timeout: float = 60.0) -> bytes | None:
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})  # noqa: S310 (https)
     last_error: Exception | None = None
-    for _ in range(retries):
+    for attempt in range(retries):
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
                 return response.read()
@@ -263,8 +264,11 @@ def _http_get(url: str, *, retries: int = 3, timeout: float = 30.0) -> bytes | N
             if e.code == 404:
                 return None  # No data for this hour/day (market closed)
             last_error = e
-        except urllib.error.URLError as e:
+        except OSError as e:
+            # Covers URLError, TimeoutError (read/connect timeout) and connection resets.
             last_error = e
+        if attempt < retries - 1:
+            time.sleep(min(2**attempt, 10))  # exponential backoff
     if last_error is not None:
         raise last_error
     return None
