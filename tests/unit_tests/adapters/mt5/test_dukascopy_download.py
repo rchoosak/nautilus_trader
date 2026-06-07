@@ -15,8 +15,8 @@
 
 import lzma
 import struct
+from datetime import UTC
 from datetime import datetime
-from datetime import timezone
 
 import pandas as pd
 import pytest
@@ -30,7 +30,7 @@ from nautilus_trader.adapters.mt5.scripts.dukascopy_download import point_for_sy
 
 
 def _epoch_ms(dt: datetime) -> int:
-    return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+    return int(dt.replace(tzinfo=UTC).timestamp() * 1000)
 
 
 def test_point_for_symbol() -> None:
@@ -42,12 +42,12 @@ def test_point_for_symbol() -> None:
 
 
 def test_tick_url_month_is_zero_indexed() -> None:
-    url = dukascopy_tick_url("EURUSD", datetime(2024, 1, 2, 3, tzinfo=timezone.utc))
+    url = dukascopy_tick_url("EURUSD", datetime(2024, 1, 2, 3, tzinfo=UTC))
     assert url.endswith("/EURUSD/2024/00/02/03h_ticks.bi5")
 
 
 def test_candle_url_month_is_zero_indexed() -> None:
-    url = dukascopy_candle_url("EUR/USD", datetime(2024, 12, 31, tzinfo=timezone.utc), "BID")
+    url = dukascopy_candle_url("EUR/USD", datetime(2024, 12, 31, tzinfo=UTC), "BID")
     assert url.endswith("/EURUSD/2024/11/31/BID_candles_min_1.bi5")
 
 
@@ -57,7 +57,7 @@ def _pack_ticks(rows: list[tuple[int, int, int, float, float]]) -> bytes:
 
 
 def test_decode_tick_bi5_scales_and_timestamps() -> None:
-    hour = datetime(2024, 6, 3, 0, tzinfo=timezone.utc)
+    hour = datetime(2024, 6, 3, 0, tzinfo=UTC)
     raw = _pack_ticks(
         [
             (500, 108325, 108319, 1.5, 1.2),  # (offset_ms, ask, bid, askvol, bidvol)
@@ -76,7 +76,7 @@ def test_decode_tick_bi5_scales_and_timestamps() -> None:
 
 
 def test_decode_tick_bi5_self_corrects_field_order() -> None:
-    hour = datetime(2024, 6, 3, 0, tzinfo=timezone.utc)
+    hour = datetime(2024, 6, 3, 0, tzinfo=UTC)
     # Lower price first (as if bid is field A) — decoder must still yield bid <= ask.
     raw = _pack_ticks([(0, 108319, 108325, 1.2, 1.5)])
 
@@ -98,7 +98,7 @@ def _pack_candles(rows: list[tuple[int, int, int, int, int, float]]) -> bytes:
 
 
 def test_decode_candle_bi5_ohlcv_and_drops_invalid() -> None:
-    day = datetime(2024, 6, 3, tzinfo=timezone.utc)
+    day = datetime(2024, 6, 3, tzinfo=UTC)
     raw = _pack_candles(
         [
             (0, 108320, 108350, 108310, 108360, 120.0),  # (offset_s, open, close, low, high, vol)

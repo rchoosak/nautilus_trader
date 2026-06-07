@@ -13,7 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
-"""
+r"""
 Download Dukascopy historical FX data (tick or minute) and prepare it for backtesting.
 
 The command fetches Dukascopy's public ``.bi5`` datafeed directly (LZMA-compressed binary,
@@ -42,9 +42,9 @@ import lzma
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
 
 import click
@@ -244,7 +244,7 @@ def _empty_bar_frame() -> pd.DataFrame:
 
 
 def _to_epoch_ms(dt: datetime) -> int:
-    return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+    return int(dt.replace(tzinfo=UTC).timestamp() * 1000)
 
 
 # -------------------------------------------------------------------------------------------------
@@ -479,8 +479,8 @@ def main(
     """
     Download Dukascopy data (FX or metals) and prepare it for backtesting.
     """
-    start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=UTC)
+    end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=UTC)
     if end_dt <= start_dt:
         raise click.BadParameter("--end must be after --start")
 

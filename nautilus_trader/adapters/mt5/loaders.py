@@ -151,7 +151,7 @@ def mt5_fx_instrument(
         "filling_mode": 2,
     }
     instrument = parse_instrument(info, ts_init=ts_init)
-    assert isinstance(instrument, CurrencyPair)  # noqa: S101 (6-letter symbol always parses as a pair)
+    assert isinstance(instrument, CurrencyPair)
     return instrument
 
 
@@ -325,11 +325,9 @@ def _rename_columns(
     spec: dict[str, tuple[str, ...]],
     column_map: dict[str, str] | None,
 ) -> pd.DataFrame:
-    rename: dict[str, str] = {}
-    if column_map:
-        for src, tgt in column_map.items():
-            if src in df.columns:
-                rename[src] = tgt
+    rename: dict[str, str] = (
+        {src: tgt for src, tgt in column_map.items() if src in df.columns} if column_map else {}
+    )
 
     lower = {str(c).strip().lower(): c for c in df.columns}
     taken = set(rename.values())
