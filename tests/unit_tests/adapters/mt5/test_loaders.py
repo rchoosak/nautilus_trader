@@ -13,12 +13,17 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
+from decimal import Decimal
+
 import pandas as pd
 import pytest
 
+from nautilus_trader.adapters.mt5.loaders import default_digits
 from nautilus_trader.adapters.mt5.loaders import load_dukascopy_bars
 from nautilus_trader.adapters.mt5.loaders import load_dukascopy_quote_ticks
 from nautilus_trader.adapters.mt5.loaders import mt5_fx_instrument
+from nautilus_trader.adapters.mt5.loaders import parse_trade_size_spec
+from nautilus_trader.adapters.mt5.loaders import risk_based_lots
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.data import QuoteTick
@@ -42,9 +47,31 @@ def test_mt5_fx_instrument_accepts_slashed_symbol_and_jpy_precision() -> None:
     assert instrument.price_precision == 3
 
 
-def test_mt5_fx_instrument_rejects_non_fx_symbol() -> None:
+def test_mt5_fx_instrument_rejects_non_six_letter_symbol() -> None:
     with pytest.raises(ValueError):
         mt5_fx_instrument("XAUUSDX")
+
+
+def test_default_digits_fx_jpy_and_metal() -> None:
+    assert default_digits("EURUSD") == 5
+    assert default_digits("USDJPY") == 3
+    assert default_digits("XAUUSD") == 3
+    assert default_digits("XAGUSD") == 3
+
+
+def test_mt5_fx_instrument_supports_gold() -> None:
+    gold = mt5_fx_instrument("XAUUSD")
+
+    assert gold.id.value == "XAUUSD.MT5"
+    assert gold.price_precision == 3  # gold, not FX 5-digit
+    assert gold.base_currency.code == "XAU"
+    assert gold.quote_currency.code == "USD"
+    assert gold.multiplier.as_double() == 100.0  # 100 oz per lot, not 100_000
+
+    # Explicit overrides win (e.g. a broker with 2-digit gold / different contract).
+    custom = mt5_fx_instrument("XAUUSD", digits=2, contract_size=1.0)
+    assert custom.price_precision == 2
+    assert custom.multiplier.as_double() == 1.0
 
 
 def test_load_dukascopy_quote_ticks_from_web_csv_layout() -> None:
@@ -113,3 +140,25 @@ def test_load_dukascopy_bars_missing_column_raises() -> None:
 
     with pytest.raises(ValueError):
         load_dukascopy_bars(df, bar_type=bar_type, instrument=instrument)
+
+
+def test_parse_trade_size_spec() -> None:
+    assert parse_trade_size_spec("risk:1%") == (1.0, None)
+    assert parse_trade_size_spec("risk:0.5") == (0.5, None)
+    assert parse_trade_size_spec("0.10") == (None, Decimal("0.10"))
+
+
+def test_risk_based_lots_eurusd() -> None:
+    instrument = mt5_fx_instrument("EURUSD")
+    # 1% of 100k = 1000 risk; 50 pip stop (0.005) x 100k contract = 500/lot -> 2.0 lots.
+    lots = risk_based_lots(100_000.0, risk_pct=1.0, stop_pips=50.0, instrument=instrument)
+    assert lots == Decimal("2.00")
+
+
+def test_risk_based_lots_jpy_pip_and_min_clamp() -> None:
+    usdjpy = mt5_fx_instrument("USDJPY")  # pip = 0.01
+    assert risk_based_lots(100_000.0, risk_pct=1.0, stop_pips=50.0, instrument=usdjpy) == Decimal("0.02")
+
+    eurusd = mt5_fx_instrument("EURUSD")
+    # Tiny equity floors below the step and clamps up to the minimum volume.
+    assert risk_based_lots(100.0, risk_pct=0.1, stop_pips=50.0, instrument=eurusd) == Decimal("0.01")

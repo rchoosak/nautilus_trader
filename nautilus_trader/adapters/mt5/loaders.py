@@ -58,32 +58,62 @@ _BAR_SPEC = {
     "volume": ("volume", "v", "vol"),
 }
 
+# Known non-FX (metal) instrument specs for offline backtests: base code -> (digits, contract
+# size in units per lot). Live trading reads these from the broker's ``symbol_info``; offline
+# we provide sensible Dukascopy/MT5 defaults that can be overridden per call.
+_METAL_SPECS: dict[str, tuple[int, float]] = {
+    "XAU": (3, 100.0),  # gold, 100 troy oz per lot
+    "XAG": (3, 5_000.0),  # silver, 5000 troy oz per lot
+    "XPT": (3, 100.0),  # platinum
+    "XPD": (3, 100.0),  # palladium
+}
+
+
+def default_digits(symbol: str) -> int:
+    """
+    Return the default price precision for an MT5 symbol.
+
+    Metals (``XAU*``/``XAG*``/``XPT*``/``XPD*``) use 3 digits, ``*JPY`` FX pairs use 3, and
+    all other FX pairs use 5.
+    """
+    normalized = symbol.upper().replace("/", "")
+    metal = _METAL_SPECS.get(normalized[:3])
+    if metal is not None:
+        return metal[0]
+    return 3 if normalized.endswith("JPY") else 5
+
 
 def mt5_fx_instrument(
     symbol: str,
     *,
     digits: int | None = None,
-    contract_size: float = 100_000.0,
+    contract_size: float | None = None,
     volume_step: float = 0.01,
     volume_min: float = 0.01,
     volume_max: float = 100.0,
     ts_init: int | None = None,
 ) -> CurrencyPair:
     """
-    Build an MT5-venue FX ``CurrencyPair`` for offline backtesting.
+    Build an MT5-venue ``CurrencyPair`` for offline backtesting (FX or metals).
 
     The instrument is produced through the same ``parse_instrument`` path used by the live
     adapter (by passing a synthesised ``symbol_info`` mapping), so it is identical in shape
-    to a live MT5 instrument and carries the ``<SYMBOL>.MT5`` identifier.
+    to a live MT5 instrument and carries the ``<SYMBOL>.MT5`` identifier. Price precision and
+    contract size default to FX conventions (5 digits, 3 for ``*JPY``, 100 000 units per lot),
+    or to the known metal specs for ``XAUUSD``/``XAGUSD``/etc. Live trading reads these from
+    the broker; offline they default here and may be overridden for any other CFD via the
+    ``digits`` / ``contract_size`` arguments.
 
     Parameters
     ----------
     symbol : str
-        The six-letter FX symbol, for example ``"EURUSD"`` (``"EUR/USD"`` is also accepted).
+        The six-letter symbol, for example ``"EURUSD"`` or ``"XAUUSD"`` (``"EUR/USD"`` form
+        also accepted).
     digits : int, optional
-        Price precision. Defaults to 3 for ``*JPY`` pairs, otherwise 5.
-    contract_size : float, default 100_000
-        The trade contract size (units per lot).
+        Price precision. Defaults per :func:`default_digits`.
+    contract_size : float, optional
+        The trade contract size (units per lot). Defaults to the metal lot size for metals,
+        otherwise 100 000.
     volume_step : float, default 0.01
         The minimum volume increment, in lots.
     volume_min : float, default 0.01
@@ -100,10 +130,13 @@ def mt5_fx_instrument(
     """
     normalized = symbol.upper().replace("/", "")
     if len(normalized) != 6:
-        raise ValueError(f"Expected a six-letter FX symbol, was {symbol!r}")
+        raise ValueError(f"Expected a six-letter symbol (e.g. EURUSD, XAUUSD), was {symbol!r}")
 
+    metal = _METAL_SPECS.get(normalized[:3])
     if digits is None:
-        digits = 3 if normalized.endswith("JPY") else 5
+        digits = default_digits(normalized)
+    if contract_size is None:
+        contract_size = metal[1] if metal is not None else 100_000.0
 
     info = {
         "name": normalized,
@@ -118,8 +151,54 @@ def mt5_fx_instrument(
         "filling_mode": 2,
     }
     instrument = parse_instrument(info, ts_init=ts_init)
-    assert isinstance(instrument, CurrencyPair)  # noqa: S101 (six-letter symbol is always FX)
+    assert isinstance(instrument, CurrencyPair)  # noqa: S101 (6-letter symbol always parses as a pair)
     return instrument
+
+
+def parse_trade_size_spec(spec: str) -> tuple[float | None, Decimal | None]:
+    """
+    Parse a trade-size specification into ``(risk_pct, fixed_size)``.
+
+    A risk specification ``"risk:<pct>%"`` (for example ``"risk:1%"``) returns
+    ``(pct, None)`` for equity-based sizing; any other value is treated as a fixed lot
+    size and returns ``(None, Decimal(spec))``.
+    """
+    spec = spec.strip()
+    if spec.lower().startswith("risk:"):
+        pct = float(spec.split(":", 1)[1].strip().rstrip("%"))
+        return pct, None
+    return None, Decimal(spec)
+
+
+def risk_based_lots(
+    equity: float,
+    *,
+    risk_pct: float,
+    stop_pips: float,
+    instrument: CurrencyPair,
+) -> Decimal:
+    """
+    Compute a position size (in lots) that risks ``risk_pct`` of ``equity``.
+
+    The size is derived from the stop distance:
+    ``lots = (equity * risk_pct/100) / (stop_pips * pip_size * contract_size)``, then floored
+    to the instrument volume step and clamped to its minimum. Assumes the quote currency
+    matches the account currency (typical for FX pairs quoted in the account currency).
+    """
+    pip_size = Decimal(str(instrument.price_increment)) * Decimal(10)
+    contract_size = Decimal(str(instrument.multiplier))
+    stop = Decimal(str(stop_pips)) * pip_size
+
+    denominator = stop * contract_size
+    if denominator <= 0:
+        raise ValueError("Invalid stop distance / contract size for risk-based sizing")
+
+    lots = (Decimal(str(equity)) * Decimal(str(risk_pct)) / Decimal(100)) / denominator
+
+    step = instrument.size_increment.as_decimal()
+    size = (lots // step) * step  # floor to the volume step (conservative)
+    min_qty = instrument.min_quantity.as_decimal() if instrument.min_quantity is not None else step
+    return max(size, min_qty)
 
 
 def load_dukascopy_quote_ticks(

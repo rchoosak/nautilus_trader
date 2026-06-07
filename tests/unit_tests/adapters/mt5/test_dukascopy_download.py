@@ -37,6 +37,8 @@ def test_point_for_symbol() -> None:
     assert point_for_symbol("EURUSD") == pytest.approx(1e-5)
     assert point_for_symbol("USDJPY") == pytest.approx(1e-3)
     assert point_for_symbol("EUR/JPY") == pytest.approx(1e-3)
+    assert point_for_symbol("XAUUSD") == pytest.approx(1e-3)  # metal scaled as 3-digit, not FX 5
+    assert point_for_symbol("XAUUSD", digits=2) == pytest.approx(1e-2)  # explicit override
 
 
 def test_tick_url_month_is_zero_indexed() -> None:

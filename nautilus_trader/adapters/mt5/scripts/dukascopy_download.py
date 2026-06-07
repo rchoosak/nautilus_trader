@@ -39,7 +39,6 @@ Download a month of EURUSD 1-minute bars (aggregated from ticks) as parquet::
 from __future__ import annotations
 
 import lzma
-import struct
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -52,6 +51,7 @@ import click
 import numpy as np
 import pandas as pd
 
+from nautilus_trader.adapters.mt5.loaders import default_digits
 from nautilus_trader.adapters.mt5.loaders import load_dukascopy_bars
 from nautilus_trader.adapters.mt5.loaders import load_dukascopy_quote_ticks
 from nautilus_trader.adapters.mt5.loaders import mt5_fx_instrument
@@ -60,8 +60,6 @@ from nautilus_trader.model.data import BarType
 
 _DATAFEED = "https://datafeed.dukascopy.com/datafeed"
 _USER_AGENT = "nautilus-trader-dukascopy-downloader"
-_TICK_STRUCT = struct.Struct(">3i2f")  # (ms_offset, price_a, price_b, vol_a, vol_b)
-_CANDLE_STRUCT = struct.Struct(">5if")  # (offset, open, close, low, high, volume)
 
 
 # -------------------------------------------------------------------------------------------------
@@ -71,13 +69,13 @@ _CANDLE_STRUCT = struct.Struct(">5if")  # (offset, open, close, low, high, volum
 
 def point_for_symbol(symbol: str, digits: int | None = None) -> float:
     """
-    Return the price ``point`` (``10**-digits``) for an FX symbol.
+    Return the price ``point`` (``10**-digits``) for an MT5 symbol.
 
-    Defaults to 3 digits for ``*JPY`` pairs, otherwise 5 (matching ``mt5_fx_instrument``).
+    When ``digits`` is not given it is taken from :func:`default_digits` (FX, JPY or metal),
+    so metals such as ``XAUUSD`` are scaled correctly (3 digits) rather than as FX.
     """
-    normalized = symbol.upper().replace("/", "")
     if digits is None:
-        digits = 3 if normalized.endswith("JPY") else 5
+        digits = default_digits(symbol)
     return 10.0**-digits
 
 
@@ -292,11 +290,12 @@ def download_ticks(
     end: datetime,
     *,
     workers: int = 8,
+    digits: int | None = None,
 ) -> pd.DataFrame:
     """
     Download and decode Dukascopy ticks for ``symbol`` over ``[start, end)``.
     """
-    point = point_for_symbol(symbol)
+    point = point_for_symbol(symbol, digits)
     hours = list(_hour_range(start, end))
 
     def fetch(hour: datetime) -> pd.DataFrame:
@@ -316,6 +315,7 @@ def download_minute(
     source: str = "aggregate",
     price_type: str = "bid",
     workers: int = 8,
+    digits: int | None = None,
 ) -> pd.DataFrame:
     """
     Download Dukascopy 1-minute bars for ``symbol`` over ``[start, end)``.
@@ -324,10 +324,10 @@ def download_minute(
     Dukascopy's daily candle files for the ``price_type`` side.
     """
     if source == "aggregate":
-        ticks = download_ticks(symbol, start, end, workers=workers)
+        ticks = download_ticks(symbol, start, end, workers=workers, digits=digits)
         return aggregate_ticks_to_minute(ticks, price_type=price_type)
 
-    point = point_for_symbol(symbol)
+    point = point_for_symbol(symbol, digits)
     side = "ASK" if price_type == "ask" else "BID"
     days = list(_day_range(start, end))
 
@@ -369,6 +369,8 @@ def write_outputs(
     out_format: str,
     output_dir: str,
     price_type: str = "bid",
+    digits: int | None = None,
+    contract_size: float | None = None,
 ) -> str:
     """
     Write the downloaded data in the requested format and return the output path.
@@ -388,7 +390,7 @@ def write_outputs(
     # catalog
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
-    instrument = mt5_fx_instrument(normalized)
+    instrument = mt5_fx_instrument(normalized, digits=digits, contract_size=contract_size)
     catalog = ParquetDataCatalog(str(output))
     catalog.write_data([instrument])
 
@@ -410,7 +412,14 @@ def write_outputs(
 
 
 @click.command()
-@click.option("--symbol", "-s", "symbols", multiple=True, required=True, help="FX symbol(s), e.g. EURUSD.")
+@click.option(
+    "--symbol",
+    "-s",
+    "symbols",
+    multiple=True,
+    required=True,
+    help="Symbol(s), e.g. EURUSD or XAUUSD.",
+)
 @click.option("--start", required=True, help="Inclusive start date (YYYY-MM-DD, UTC).")
 @click.option("--end", required=True, help="Exclusive end date (YYYY-MM-DD, UTC).")
 @click.option(
@@ -442,6 +451,18 @@ def write_outputs(
 )
 @click.option("--output", "-o", default="./dukascopy_catalog", show_default=True)
 @click.option("--workers", default=8, show_default=True, help="Concurrent download workers.")
+@click.option(
+    "--digits",
+    type=int,
+    default=None,
+    help="Override price precision (default: auto — FX/JPY/metal). Use for other CFDs.",
+)
+@click.option(
+    "--contract-size",
+    type=float,
+    default=None,
+    help="Override contract size / units per lot for the catalog instrument.",
+)
 def main(
     symbols: tuple[str, ...],
     start: str,
@@ -452,9 +473,11 @@ def main(
     out_format: str,
     output: str,
     workers: int,
+    digits: int | None,
+    contract_size: float | None,
 ) -> None:
     """
-    Download Dukascopy FX data and prepare it for backtesting.
+    Download Dukascopy data (FX or metals) and prepare it for backtesting.
     """
     start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -464,7 +487,7 @@ def main(
     for symbol in symbols:
         click.echo(f"Downloading {symbol} {granularity} {start} -> {end} ...")
         if granularity == "tick":
-            df = download_ticks(symbol, start_dt, end_dt, workers=workers)
+            df = download_ticks(symbol, start_dt, end_dt, workers=workers, digits=digits)
         else:
             df = download_minute(
                 symbol,
@@ -473,6 +496,7 @@ def main(
                 source=minute_source,
                 price_type=price_type,
                 workers=workers,
+                digits=digits,
             )
 
         if df.empty:
@@ -486,6 +510,8 @@ def main(
             out_format=out_format,
             output_dir=output,
             price_type=price_type,
+            digits=digits,
+            contract_size=contract_size,
         )
         span = f"{df['timestamp'].iloc[0]} .. {df['timestamp'].iloc[-1]}"
         click.echo(f"  {len(df):,} rows ({span}) -> {path}")
