@@ -18,6 +18,7 @@ Parsing helpers for the MetaTrader 5 adapter.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -46,6 +47,24 @@ from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
 
+@dataclass(frozen=True)
+class MT5SymbolRules:
+    """
+    Broker-specific trading rules derived from MT5 ``symbol_info``.
+    """
+
+    symbol: str
+    trade_mode: int | None
+    filling_mode: int | None
+    order_mode: int | None
+    volume_min: Decimal
+    volume_max: Decimal
+    volume_step: Decimal
+    trade_stops_level: int
+    trade_freeze_level: int
+    point: Decimal
+
+
 def decimal_precision(value: Any) -> int:
     decimal = Decimal(str(value))
     if decimal == 0:
@@ -58,6 +77,19 @@ def decimal_precision(value: Any) -> int:
 
 def format_decimal(value: Any, precision: int) -> str:
     return f"{Decimal(str(value)):.{precision}f}"
+
+
+def get_field(obj: Any, name: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    if hasattr(obj, name):
+        return getattr(obj, name)
+    try:
+        return obj[name]
+    except (KeyError, TypeError, IndexError):
+        return default
 
 
 def mt5_time_to_nanos(obj: Any, *fields: str) -> int:
@@ -78,6 +110,22 @@ def mt5_time_to_nanos(obj: Any, *fields: str) -> int:
     return 0
 
 
+def to_unix_nanos(value: Any) -> int:
+    """
+    Convert a raw MT5 time value to UNIX nanoseconds.
+
+    Prefer :func:`mt5_time_to_nanos` when the source record exposes the field name, as it
+    disambiguates seconds from milliseconds by field rather than by magnitude.
+    """
+    if value is None:
+        return 0
+    if isinstance(value, int | float):
+        if value > 10_000_000_000:
+            return int(value) * 1_000_000
+        return int(value) * 1_000_000_000
+    return int(pd.Timestamp(value).tz_convert("UTC").value)
+
+
 def utc_now_ns() -> int:
     return int(pd.Timestamp.now(tz="UTC").value)
 
@@ -86,17 +134,27 @@ def utc_from_ns(ns: int) -> datetime:
     return pd.Timestamp(ns, unit="ns", tz="UTC").to_pydatetime()
 
 
-def get_field(obj: Any, name: str, default: Any = None) -> Any:
-    if obj is None:
-        return default
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    if hasattr(obj, name):
-        return getattr(obj, name)
-    try:
-        return obj[name]
-    except (KeyError, TypeError, IndexError):
-        return default
+def parse_symbol_rules(info: Any) -> MT5SymbolRules:
+    """
+    Parse MT5 broker trading rules from ``symbol_info``.
+    """
+    symbol = get_field(info, "name")
+    if not symbol:
+        raise ValueError("MT5 symbol_info had no name")
+    digits = int(get_field(info, "digits", 5) or 5)
+    point = Decimal(str(get_field(info, "point", Decimal(10) ** -digits)))
+    return MT5SymbolRules(
+        symbol=symbol,
+        trade_mode=get_field(info, "trade_mode", None),
+        filling_mode=get_field(info, "filling_mode", None),
+        order_mode=get_field(info, "order_mode", None),
+        volume_min=Decimal(str(get_field(info, "volume_min", 0) or 0)),
+        volume_max=Decimal(str(get_field(info, "volume_max", 0) or 0)),
+        volume_step=Decimal(str(get_field(info, "volume_step", 1) or 1)),
+        trade_stops_level=int(get_field(info, "trade_stops_level", 0) or 0),
+        trade_freeze_level=int(get_field(info, "trade_freeze_level", 0) or 0),
+        point=point,
+    )
 
 
 def parse_instrument(
@@ -137,6 +195,8 @@ def parse_instrument(
     lot_size = Quantity.from_str(format_decimal(1, size_precision))
     multiplier = Quantity.from_str(format_decimal(contract_size, decimal_precision(contract_size)))
     ts = ts_init if ts_init is not None else utc_now_ns()
+    info_dict = dict(info._asdict()) if hasattr(info, "_asdict") else {"symbol": symbol}
+    info_dict["mt5_rules"] = parse_symbol_rules(info).__dict__
 
     fx = infer_fx_currencies(symbol, symbol_suffixes)
     if fx is not None:
@@ -160,12 +220,11 @@ def parse_instrument(
             taker_fee=Decimal(0),
             ts_event=ts,
             ts_init=ts,
-            info=dict(info._asdict()) if hasattr(info, "_asdict") else {"symbol": symbol},
+            info=info_dict,
         )
 
     quote_currency = Currency.from_str(currency_profit or "USD", strict=False)
     asset_class = getattr(AssetClass, default_asset_class, AssetClass.FX)
-
     return Cfd(
         instrument_id=instrument_id,
         raw_symbol=raw_symbol,
@@ -184,7 +243,7 @@ def parse_instrument(
         taker_fee=Decimal(0),
         ts_event=ts,
         ts_init=ts,
-        info=dict(info._asdict()) if hasattr(info, "_asdict") else {"symbol": symbol},
+        info=info_dict,
     )
 
 

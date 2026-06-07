@@ -31,8 +31,7 @@ def mt5_symbol_from_instrument_id(instrument_id: InstrumentId) -> str:
     """
     Return the MT5-native symbol encoded by a Nautilus instrument ID.
     """
-    symbol = instrument_id.symbol.value
-    return symbol.replace("/", "")
+    return instrument_id.symbol.value.replace("/", "")
 
 
 def instrument_id_from_mt5_symbol(symbol: str) -> InstrumentId:
@@ -48,11 +47,9 @@ def strip_symbol_suffix(symbol: str, suffixes: list[str] | None) -> str:
     """
     if not suffixes:
         return symbol
-
     for suffix in suffixes:
         if suffix and symbol.endswith(suffix):
             return symbol[: -len(suffix)]
-
     return symbol
 
 
@@ -63,6 +60,5 @@ def infer_fx_currencies(symbol: str, suffixes: list[str] | None = None) -> tuple
     normalized = strip_symbol_suffix(symbol.upper().replace("/", ""), suffixes)
     if not _FX_RE.match(normalized):
         return None
-
     return normalized[:3], normalized[3:]
 

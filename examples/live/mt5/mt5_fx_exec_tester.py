@@ -14,12 +14,7 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 """
-Demonstrates a guarded Forex execution smoke test through a MetaTrader 5 terminal.
-
-By default this script subscribes to data and starts the execution client without
-placing orders. Set ``MT5_PLACE_ORDERS=1`` and use a demo account to enable the
-test limit-order flow.
-
+Guarded Forex execution smoke test through a MetaTrader 5 terminal.
 """
 
 import os
@@ -53,22 +48,10 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "y"}
 
 
-def env_csv(name: str) -> list[str] | None:
-    value = os.getenv(name)
-    if not value:
-        return None
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
 symbol = os.getenv("MT5_SYMBOL", "EURUSD")
 instrument_id = InstrumentId.from_str(f"{symbol}.{MT5}")
-order_qty = Decimal(os.getenv("MT5_ORDER_QTY", "0.01"))
 place_orders = env_bool("MT5_PLACE_ORDERS")
-
-instrument_provider = MT5InstrumentProviderConfig(
-    load_symbols=[symbol],
-    symbol_suffixes=env_csv("MT5_SYMBOL_SUFFIXES"),
-)
+instrument_provider = MT5InstrumentProviderConfig(load_symbols=[symbol])
 
 common_client_kwargs = {
     "login": env_int("MT5_LOGIN"),
@@ -101,6 +84,7 @@ config_node = TradingNodeConfig(
             account_id=os.getenv("MT5_ACCOUNT_ID"),
             magic=int(os.getenv("MT5_MAGIC", "10001")),
             deviation=int(os.getenv("MT5_DEVIATION", "20")),
+            use_order_check=env_bool("MT5_USE_ORDER_CHECK", True),
         ),
     },
     timeout_connection=30.0,
@@ -111,12 +95,11 @@ config_node = TradingNodeConfig(
 )
 
 node = TradingNode(config=config_node)
-
 strategy = ExecTester(
     config=ExecTesterConfig(
         instrument_id=instrument_id,
         external_order_claims=[instrument_id],
-        order_qty=order_qty,
+        order_qty=Decimal(os.getenv("MT5_ORDER_QTY", "0.01")),
         subscribe_quotes=True,
         subscribe_trades=False,
         enable_limit_buys=place_orders,
@@ -139,3 +122,4 @@ if __name__ == "__main__":
         node.run()
     finally:
         node.dispose()
+

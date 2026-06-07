@@ -21,7 +21,9 @@ from typing import Any
 from nautilus_trader.adapters.mt5.bridge import MT5TerminalBridge
 from nautilus_trader.adapters.mt5.config import MT5InstrumentProviderConfig
 from nautilus_trader.adapters.mt5.constants import MT5_VENUE
+from nautilus_trader.adapters.mt5.parsing import MT5SymbolRules
 from nautilus_trader.adapters.mt5.parsing import parse_instrument
+from nautilus_trader.adapters.mt5.parsing import parse_symbol_rules
 from nautilus_trader.adapters.mt5.symbol import mt5_symbol_from_instrument_id
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.core.correctness import PyCondition
@@ -41,9 +43,12 @@ class MT5InstrumentProvider(InstrumentProvider):
         super().__init__(config=config)
         self._bridge = bridge
         self._config = config or MT5InstrumentProviderConfig()
+        self._rules_by_symbol: dict[str, MT5SymbolRules] = {}
         self._log_warnings = self._config.log_warnings
-        load_all_on_start = bool(getattr(self, "_load_all_on_start", False) or self._config.load_symbols)
-        self._load_all_on_start = load_all_on_start
+        self._load_all_on_start = bool(getattr(self, "_load_all_on_start", False) or self._config.load_symbols)
+
+    def rules(self, symbol: str) -> MT5SymbolRules | None:
+        return self._rules_by_symbol.get(symbol)
 
     async def load_all_async(self, filters: dict | None = None) -> None:
         group = filters.get("group") if filters else None
@@ -66,7 +71,6 @@ class MT5InstrumentProvider(InstrumentProvider):
         if not instrument_ids:
             self._log.warning("No instrument IDs given for loading")
             return
-
         for instrument_id in instrument_ids:
             PyCondition.equal(instrument_id.venue, MT5_VENUE, "instrument_id.venue", "MT5")
             await self.load_async(instrument_id, filters)
@@ -85,6 +89,7 @@ class MT5InstrumentProvider(InstrumentProvider):
 
     def _load_symbol_info(self, symbol_info: Any) -> None:
         try:
+            rules = parse_symbol_rules(symbol_info)
             instrument = parse_instrument(
                 symbol_info,
                 symbol_suffixes=self._config.symbol_suffixes,
@@ -95,4 +100,5 @@ class MT5InstrumentProvider(InstrumentProvider):
                 self._log.warning(f"Failed parsing MT5 instrument {getattr(symbol_info, 'name', None)}: {e}")
             return
 
+        self._rules_by_symbol[rules.symbol] = rules
         self.add(instrument)

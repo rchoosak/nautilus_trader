@@ -60,15 +60,13 @@ class MT5InstrumentProviderConfig(InstrumentProviderConfig, frozen=True):  # typ
 
     def __hash__(self):
         filters = frozenset(self.filters.items()) if self.filters else None
-        load_symbols = tuple(self.load_symbols or ())
-        symbol_suffixes = tuple(self.symbol_suffixes or ())
         return hash(
             (
                 self.load_all,
                 self.load_ids,
                 filters,
-                load_symbols,
-                symbol_suffixes,
+                tuple(self.load_symbols or ()),
+                tuple(self.symbol_suffixes or ()),
                 self.default_asset_class,
             ),
         )
@@ -114,6 +112,20 @@ class MT5DataClientConfig(LiveDataClientConfig, frozen=True):  # type: ignore[ca
     instrument_provider: MT5InstrumentProviderConfig = MT5InstrumentProviderConfig()
     poll_interval_ms: PositiveInt = 250
     market_depth_size: PositiveFloat = 1_000_000
+    deduplicate_ticks: bool = True
+    deduplicate_bars: bool = True
+    emit_closed_bars: bool = True
+    emit_forming_bars: bool = True
+    bar_poll_lookback_multiplier: PositiveInt = 3
+    warn_on_stale_ticks: bool = True
+    stale_tick_threshold_ms: PositiveInt = 5_000
+    health_warning_interval_ms: PositiveInt = 60_000
+    reconnect_enabled: bool = True
+    reconnect_initial_delay_ms: PositiveInt = 1_000
+    reconnect_max_delay_ms: PositiveInt = 30_000
+    reconnect_max_attempts: PositiveInt = 3
+    monitor_terminal_health: bool = True
+    terminal_health_check_interval_ms: PositiveInt = 30_000
 
 
 class MT5ExecClientConfig(LiveExecClientConfig, frozen=True):  # type: ignore[call-arg]
@@ -173,3 +185,13 @@ class MT5ExecClientConfig(LiveExecClientConfig, frozen=True):  # type: ignore[ca
     magic: int = 10001
     deviation: int = 20
     market_depth_size: PositiveFloat = 1_000_000
+    use_order_check: bool = True
+    filter_position_reports_by_magic: bool = True
+    persist_reconciliation_mappings: bool = True
+    reconciliation_lookback_days: PositiveInt = 30
+    reconnect_enabled: bool = True
+    reconnect_initial_delay_ms: PositiveInt = 1_000
+    reconnect_max_delay_ms: PositiveInt = 30_000
+    reconnect_max_attempts: PositiveInt = 3
+    monitor_terminal_health: bool = True
+    terminal_health_check_interval_ms: PositiveInt = 30_000

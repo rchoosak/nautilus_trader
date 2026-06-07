@@ -14,12 +14,7 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 """
-Demonstrates polling Forex quotes and external bars from a MetaTrader 5 terminal.
-
-The MetaTrader5 Python package and a logged-in MT5 terminal are required at runtime.
-Credentials can be supplied through environment variables, or omitted to use the
-terminal's current session.
-
+Forex data smoke test through a MetaTrader 5 terminal.
 """
 
 import os
@@ -50,13 +45,6 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "y"}
 
 
-def env_csv(name: str) -> list[str] | None:
-    value = os.getenv(name)
-    if not value:
-        return None
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
 symbol = os.getenv("MT5_SYMBOL", "EURUSD")
 instrument_id = InstrumentId.from_str(f"{symbol}.{MT5}")
 
@@ -70,10 +58,7 @@ config_node = TradingNodeConfig(
             server=os.getenv("MT5_SERVER"),
             path=os.getenv("MT5_PATH"),
             portable=env_bool("MT5_PORTABLE"),
-            instrument_provider=MT5InstrumentProviderConfig(
-                load_symbols=[symbol],
-                symbol_suffixes=env_csv("MT5_SYMBOL_SUFFIXES"),
-            ),
+            instrument_provider=MT5InstrumentProviderConfig(load_symbols=[symbol]),
             poll_interval_ms=int(os.getenv("MT5_POLL_INTERVAL_MS", "250")),
         ),
     },
@@ -83,7 +68,6 @@ config_node = TradingNodeConfig(
 )
 
 node = TradingNode(config=config_node)
-
 tester = DataTester(
     config=DataTesterConfig(
         instrument_ids=[instrument_id],
@@ -103,3 +87,4 @@ if __name__ == "__main__":
         node.run()
     finally:
         node.dispose()
+

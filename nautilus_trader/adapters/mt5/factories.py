@@ -63,10 +63,7 @@ def get_cached_mt5_instrument_provider(
     """
     Cache and return an MT5 instrument provider.
     """
-    return MT5InstrumentProvider(
-        bridge=bridge,
-        config=config,
-    )
+    return MT5InstrumentProvider(bridge=bridge, config=config)
 
 
 class MT5LiveDataClientFactory(LiveDataClientFactory):
@@ -91,10 +88,7 @@ class MT5LiveDataClientFactory(LiveDataClientFactory):
             portable=config.portable,
             timeout_ms=config.timeout_ms,
         )
-        provider = get_cached_mt5_instrument_provider(
-            bridge=bridge,
-            config=config.instrument_provider,
-        )
+        provider = get_cached_mt5_instrument_provider(bridge=bridge, config=config.instrument_provider)
         return MT5DataClient(
             loop=loop,
             bridge=bridge,
@@ -129,10 +123,7 @@ class MT5LiveExecClientFactory(LiveExecClientFactory):
             portable=config.portable,
             timeout_ms=config.timeout_ms,
         )
-        provider = get_cached_mt5_instrument_provider(
-            bridge=bridge,
-            config=config.instrument_provider,
-        )
+        provider = get_cached_mt5_instrument_provider(bridge=bridge, config=config.instrument_provider)
         return MT5ExecutionClient(
             loop=loop,
             bridge=bridge,
