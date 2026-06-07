@@ -18,19 +18,22 @@
 use std::{any::Any, cell::RefCell, rc::Rc};
 
 use nautilus_common::{
-    cache::Cache,
+    cache::CacheView,
     clients::{DataClient, ExecutionClient},
     clock::Clock,
+    factories::{ClientConfig, DataClientFactory, ExecutionClientFactory},
 };
 use nautilus_live::ExecutionClientCore;
 use nautilus_model::{
     enums::{AccountType, OmsType},
     identifiers::{AccountId, ClientId, TraderId},
 };
-use nautilus_system::factories::{ClientConfig, DataClientFactory, ExecutionClientFactory};
 
 use crate::{
-    common::{consts::BYBIT_VENUE, enums::BybitProductType},
+    common::{
+        consts::{BYBIT, BYBIT_VENUE},
+        enums::BybitProductType,
+    },
     config::{BybitDataClientConfig, BybitExecClientConfig},
     data::BybitDataClient,
     execution::BybitExecutionClient,
@@ -49,7 +52,15 @@ impl ClientConfig for BybitExecClientConfig {
 }
 
 /// Factory for creating Bybit data clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.bybit")
+)]
 pub struct BybitDataClientFactory;
 
 impl BybitDataClientFactory {
@@ -71,7 +82,7 @@ impl DataClientFactory for BybitDataClientFactory {
         &self,
         name: &str,
         config: &dyn ClientConfig,
-        _cache: Rc<RefCell<Cache>>,
+        _cache: CacheView,
         _clock: Rc<RefCell<dyn Clock>>,
     ) -> anyhow::Result<Box<dyn DataClient>> {
         let bybit_config = config
@@ -90,7 +101,7 @@ impl DataClientFactory for BybitDataClientFactory {
     }
 
     fn name(&self) -> &'static str {
-        "BYBIT"
+        BYBIT
     }
 
     fn config_type(&self) -> &'static str {
@@ -99,7 +110,15 @@ impl DataClientFactory for BybitDataClientFactory {
 }
 
 /// Factory for creating Bybit execution clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bybit", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.bybit")
+)]
 pub struct BybitExecutionClientFactory {
     trader_id: TraderId,
     account_id: AccountId,
@@ -121,7 +140,7 @@ impl ExecutionClientFactory for BybitExecutionClientFactory {
         &self,
         name: &str,
         config: &dyn ClientConfig,
-        cache: Rc<RefCell<Cache>>,
+        cache: CacheView,
     ) -> anyhow::Result<Box<dyn ExecutionClient>> {
         let bybit_config = config
             .as_any()
@@ -179,7 +198,7 @@ impl ExecutionClientFactory for BybitExecutionClientFactory {
     }
 
     fn name(&self) -> &'static str {
-        "BYBIT"
+        BYBIT
     }
 
     fn config_type(&self) -> &'static str {
@@ -191,9 +210,11 @@ impl ExecutionClientFactory for BybitExecutionClientFactory {
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use nautilus_common::cache::Cache;
+    use nautilus_common::{
+        cache::Cache,
+        factories::{ClientConfig, ExecutionClientFactory},
+    };
     use nautilus_model::identifiers::{AccountId, TraderId};
-    use nautilus_system::factories::{ClientConfig, ExecutionClientFactory};
     use rstest::rstest;
 
     use super::*;
@@ -205,7 +226,7 @@ mod tests {
             TraderId::from("TRADER-001"),
             AccountId::from("BYBIT-001"),
         );
-        assert_eq!(factory.name(), "BYBIT");
+        assert_eq!(factory.name(), BYBIT);
         assert_eq!(factory.config_type(), "BybitExecClientConfig");
     }
 
@@ -236,7 +257,7 @@ mod tests {
 
         let cache = Rc::new(RefCell::new(Cache::default()));
 
-        let result = factory.create("BYBIT-TEST", &config, cache);
+        let result = factory.create("BYBIT-TEST", &config, cache.into());
         assert!(result.is_ok());
 
         let client = result.unwrap();
@@ -258,8 +279,8 @@ mod tests {
 
         let cache = Rc::new(RefCell::new(Cache::default()));
 
-        let result = factory.create("BYBIT-DERIV", &config, cache);
-        assert!(result.is_ok());
+        let result = factory.create("BYBIT-DERIV", &config, cache.into());
+        result.unwrap();
     }
 
     #[rstest]
@@ -272,7 +293,7 @@ mod tests {
 
         let cache = Rc::new(RefCell::new(Cache::default()));
 
-        let result = factory.create("BYBIT-TEST", &wrong_config, cache);
+        let result = factory.create("BYBIT-TEST", &wrong_config, cache.into());
         assert!(result.is_err());
         assert!(
             result

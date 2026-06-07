@@ -15,8 +15,10 @@
 
 //! Binance Spot-specific enumerations.
 
-use nautilus_model::enums::OrderType;
+use nautilus_model::enums::{OrderType, TimeInForce};
 use serde::{Deserialize, Serialize};
+
+use crate::common::enums::BinanceTimeInForce;
 
 /// Spot order type enumeration.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -64,6 +66,35 @@ pub enum BinanceCancelReplaceMode {
     AllowFailure,
 }
 
+/// Spot user data stream event types.
+///
+/// These are the `"e"` field values on JSON frames emitted by the Spot user
+/// data stream and the Spot WebSocket Trading API. The Spot wire format is
+/// camelCase throughout; this enum is kept separate from
+/// [`crate::common::enums::BinanceWsEventType`], which mixes camelCase
+/// market-data events with `SCREAMING_SNAKE_CASE` Futures user-data events.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BinanceSpotUserDataEventType {
+    /// Order execution report (`executionReport`).
+    ExecutionReport,
+    /// Account position update (`outboundAccountPosition`).
+    OutboundAccountPosition,
+    /// Balance update (`balanceUpdate`).
+    BalanceUpdate,
+    /// Server shutdown notice, sent ~10 minutes before disconnection.
+    ServerShutdown,
+    /// Listen key expired (legacy user data stream session).
+    ListenKeyExpired,
+    /// External lock update (`externalLockUpdate`).
+    ExternalLockUpdate,
+    /// Event stream terminated.
+    EventStreamTerminated,
+    /// Unknown or undocumented event type.
+    #[serde(other)]
+    Unknown,
+}
+
 /// Converts a Nautilus order type to Binance Spot order type.
 ///
 /// # Errors
@@ -79,6 +110,79 @@ pub fn order_type_to_binance_spot(
         (OrderType::Limit, false) => Ok(BinanceSpotOrderType::Limit),
         (OrderType::StopMarket, _) => Ok(BinanceSpotOrderType::StopLoss),
         (OrderType::StopLimit, _) => Ok(BinanceSpotOrderType::StopLossLimit),
+        (OrderType::MarketIfTouched, _) => Ok(BinanceSpotOrderType::TakeProfit),
+        (OrderType::LimitIfTouched, _) => Ok(BinanceSpotOrderType::TakeProfitLimit),
         _ => anyhow::bail!("Unsupported order type for Binance Spot: {order_type:?}"),
+    }
+}
+
+/// Converts a Nautilus time in force to Binance Spot time in force.
+///
+/// Binance Spot only supports GTC, IOC, and FOK. GTD and other TIF values
+/// are rejected.
+///
+/// # Errors
+///
+/// Returns an error if the time in force is not supported on Binance Spot.
+pub fn time_in_force_to_binance_spot(tif: TimeInForce) -> anyhow::Result<BinanceTimeInForce> {
+    match tif {
+        TimeInForce::Gtc => Ok(BinanceTimeInForce::Gtc),
+        TimeInForce::Ioc => Ok(BinanceTimeInForce::Ioc),
+        TimeInForce::Fok => Ok(BinanceTimeInForce::Fok),
+        _ => anyhow::bail!("Unsupported time in force for Binance Spot: {tif:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case(OrderType::Market, false, BinanceSpotOrderType::Market)]
+    #[case(OrderType::Limit, false, BinanceSpotOrderType::Limit)]
+    #[case(OrderType::Limit, true, BinanceSpotOrderType::LimitMaker)]
+    #[case(OrderType::StopMarket, false, BinanceSpotOrderType::StopLoss)]
+    #[case(OrderType::StopLimit, false, BinanceSpotOrderType::StopLossLimit)]
+    #[case(OrderType::MarketIfTouched, false, BinanceSpotOrderType::TakeProfit)]
+    #[case(
+        OrderType::LimitIfTouched,
+        false,
+        BinanceSpotOrderType::TakeProfitLimit
+    )]
+    fn test_order_type_to_binance_spot(
+        #[case] order_type: OrderType,
+        #[case] post_only: bool,
+        #[case] expected: BinanceSpotOrderType,
+    ) {
+        let result = order_type_to_binance_spot(order_type, post_only).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case(OrderType::TrailingStopMarket)]
+    fn test_order_type_to_binance_spot_unsupported(#[case] order_type: OrderType) {
+        let result = order_type_to_binance_spot(order_type, false);
+        result.unwrap_err();
+    }
+
+    #[rstest]
+    #[case(TimeInForce::Gtc, BinanceTimeInForce::Gtc)]
+    #[case(TimeInForce::Ioc, BinanceTimeInForce::Ioc)]
+    #[case(TimeInForce::Fok, BinanceTimeInForce::Fok)]
+    fn test_time_in_force_to_binance_spot(
+        #[case] tif: TimeInForce,
+        #[case] expected: BinanceTimeInForce,
+    ) {
+        let result = time_in_force_to_binance_spot(tif).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case(TimeInForce::Gtd)]
+    fn test_time_in_force_to_binance_spot_rejects_gtd(#[case] tif: TimeInForce) {
+        let result = time_in_force_to_binance_spot(tif);
+        result.unwrap_err();
     }
 }

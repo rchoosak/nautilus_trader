@@ -116,6 +116,35 @@ class DatabentoDataLoader:
 
         return dataset
 
+    def set_price_precision(self, symbol: str, price_precision: int) -> None:
+        """
+        Cache a `price_precision` for the given `symbol`.
+
+        When market data is read without an explicit `price_precision`, the
+        loader resolves precision per record from this cache. Definitions
+        loaded via `load_instruments` are inserted automatically.
+
+        Parameters
+        ----------
+        symbol : str
+            The Databento raw symbol (e.g. "ESM4").
+        price_precision : int
+            The price precision to associate with the symbol.
+
+        """
+        self._pyo3_loader.set_price_precision(symbol, price_precision)
+
+    def get_price_precisions(self) -> dict[str, int]:
+        """
+        Return the cached price precisions keyed by symbol.
+
+        Returns
+        -------
+        dict[str, int]
+
+        """
+        return self._pyo3_loader.get_price_precisions()
+
     def from_dbn_file(  # noqa: C901 (too complex)
         self,
         path: PathLike[str] | str,
@@ -125,6 +154,7 @@ class DatabentoDataLoader:
         include_trades: bool = False,
         use_exchange_as_venue: bool = False,
         bars_timestamp_on_close: bool = True,
+        skip_on_error: bool = False,
     ) -> list[Data]:
         """
         Return a list of data objects decoded from the DBN file at the given `path`.
@@ -139,9 +169,10 @@ class DatabentoDataLoader:
             Use this only if the instrument ID is definitively known (e.g., all records in the file
             are guaranteed to be for the same instrument).
         price_precision : int, optional
-            The price precision, if different to the default of 2 for USD.
-            Use this option only if the default precision is problematic
-            The specified precision will apply to *all* records read by this call.
+            Override the price precision for *all* records read by this call.
+            When `None`, the loader resolves precision per record from the
+            cache populated by `load_instruments` or `set_price_precision`.
+            Loading fails if no precision can be resolved for an instrument.
         as_legacy_cython : bool, default True
             If data should be converted to 'legacy Cython' objects.
             You would typically only set this False if passing the objects
@@ -155,6 +186,9 @@ class DatabentoDataLoader:
             Whether to use actual exchanges for instrument ids or GLBX.
         bars_timestamp_on_close : bool, default True
             If bar timestamps should be set to close time (True) or open time (False).
+        skip_on_error : bool, default False
+            If True, instruments that fail to decode are skipped with a warning log.
+            If False (default), any decode error is raised as an exception.
 
         Returns
         -------
@@ -185,7 +219,11 @@ class DatabentoDataLoader:
 
         match schema:
             case DatabentoSchema.DEFINITION.value:
-                data = self._pyo3_loader.load_instruments(str(path), use_exchange_as_venue)
+                data = self._pyo3_loader.load_instruments(
+                    str(path),
+                    use_exchange_as_venue,
+                    skip_on_error,
+                )
 
                 if as_legacy_cython:
                     data = instruments_from_pyo3(data)
@@ -354,7 +392,11 @@ class DatabentoDataLoader:
 
                     return data
                 else:
-                    return self._pyo3_loader.load_order_book_depth10(str(path), pyo3_instrument_id)
+                    return self._pyo3_loader.load_order_book_depth10(
+                        filepath=str(path),
+                        instrument_id=pyo3_instrument_id,
+                        price_precision=price_precision,
+                    )
             case DatabentoSchema.TRADES.value:
                 if as_legacy_cython:
                     capsule = self._pyo3_loader.load_trades_as_pycapsule(
@@ -368,7 +410,11 @@ class DatabentoDataLoader:
 
                     return data
                 else:
-                    return self._pyo3_loader.load_trades(str(path), pyo3_instrument_id)
+                    return self._pyo3_loader.load_trades(
+                        filepath=str(path),
+                        instrument_id=pyo3_instrument_id,
+                        price_precision=price_precision,
+                    )
             case (
                 DatabentoSchema.OHLCV_1S.value
                 | DatabentoSchema.OHLCV_1M.value
@@ -400,6 +446,7 @@ class DatabentoDataLoader:
                     filepath=str(path),
                     instrument_id=pyo3_instrument_id,
                 )
+
                 if as_legacy_cython:
                     return InstrumentStatus.from_pyo3_list(data)
 

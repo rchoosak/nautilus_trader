@@ -17,10 +17,13 @@ use std::{cell::RefCell, rc::Rc};
 
 use nautilus_common::msgbus::Handler;
 use nautilus_core::WeakCell;
-use nautilus_model::data::{Bar, BarType, QuoteTick, TradeTick};
+use nautilus_model::{
+    data::{Bar, BarType, QuoteTick, TradeTick},
+    identifiers::InstrumentId,
+};
 use ustr::Ustr;
 
-use crate::aggregation::BarAggregator;
+use crate::aggregation::{BarAggregator, SpreadQuoteAggregator};
 
 /// Message handler for processing quote ticks through bar aggregators.
 ///
@@ -34,9 +37,9 @@ pub struct BarQuoteHandler {
 }
 
 impl BarQuoteHandler {
-    pub(crate) fn new(aggregator: Rc<RefCell<Box<dyn BarAggregator>>>, bar_type: BarType) -> Self {
+    pub(crate) fn new(aggregator: &Rc<RefCell<Box<dyn BarAggregator>>>, bar_type: BarType) -> Self {
         Self {
-            aggregator: WeakCell::from(Rc::downgrade(&aggregator)),
+            aggregator: WeakCell::from(Rc::downgrade(aggregator)),
             bar_type,
         }
     }
@@ -66,9 +69,9 @@ pub struct BarTradeHandler {
 }
 
 impl BarTradeHandler {
-    pub(crate) fn new(aggregator: Rc<RefCell<Box<dyn BarAggregator>>>, bar_type: BarType) -> Self {
+    pub(crate) fn new(aggregator: &Rc<RefCell<Box<dyn BarAggregator>>>, bar_type: BarType) -> Self {
         Self {
-            aggregator: WeakCell::from(Rc::downgrade(&aggregator)),
+            aggregator: WeakCell::from(Rc::downgrade(aggregator)),
             bar_type,
         }
     }
@@ -99,9 +102,9 @@ pub struct BarBarHandler {
 }
 
 impl BarBarHandler {
-    pub(crate) fn new(aggregator: Rc<RefCell<Box<dyn BarAggregator>>>, bar_type: BarType) -> Self {
+    pub(crate) fn new(aggregator: &Rc<RefCell<Box<dyn BarAggregator>>>, bar_type: BarType) -> Self {
         Self {
-            aggregator: WeakCell::from(Rc::downgrade(&aggregator)),
+            aggregator: WeakCell::from(Rc::downgrade(aggregator)),
             bar_type,
         }
     }
@@ -115,6 +118,43 @@ impl Handler<Bar> for BarBarHandler {
     fn handle(&self, bar: &Bar) {
         if let Some(agg) = self.aggregator.upgrade() {
             agg.borrow_mut().handle_bar(*bar);
+        }
+    }
+}
+
+/// Message handler for processing leg quotes through spread quote aggregators.
+#[derive(Debug)]
+pub struct SpreadQuoteHandler {
+    aggregator: WeakCell<SpreadQuoteAggregator>,
+    spread_instrument_id: InstrumentId,
+    leg_instrument_id: InstrumentId,
+}
+
+impl SpreadQuoteHandler {
+    pub(crate) fn new(
+        aggregator: &Rc<RefCell<SpreadQuoteAggregator>>,
+        spread_instrument_id: InstrumentId,
+        leg_instrument_id: InstrumentId,
+    ) -> Self {
+        Self {
+            aggregator: WeakCell::from(Rc::downgrade(aggregator)),
+            spread_instrument_id,
+            leg_instrument_id,
+        }
+    }
+}
+
+impl Handler<QuoteTick> for SpreadQuoteHandler {
+    fn id(&self) -> Ustr {
+        Ustr::from(&format!(
+            "SpreadQuoteHandler|{}|{}",
+            self.spread_instrument_id, self.leg_instrument_id,
+        ))
+    }
+
+    fn handle(&self, quote: &QuoteTick) {
+        if let Some(agg) = self.aggregator.upgrade() {
+            agg.borrow_mut().handle_quote_tick(*quote);
         }
     }
 }

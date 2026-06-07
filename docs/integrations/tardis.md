@@ -3,7 +3,7 @@
 Tardis provides granular data for cryptocurrency markets including tick-by-tick order book snapshots & updates,
 trades, open interest, funding rates, options chains and liquidations data for leading crypto exchanges.
 
-NautilusTrader provides an integration with the Tardis API and data formats, enabling seamless access.
+NautilusTrader provides an integration with the Tardis API and data formats, enabling access.
 The capabilities of this adapter include:
 
 - `TardisCSVDataLoader`: Reads Tardis-format CSV files and converts them into Nautilus data, with support for both bulk loading and memory-efficient streaming.
@@ -11,7 +11,7 @@ The capabilities of this adapter include:
 - `TardisHttpClient`: Requests instrument definition metadata from the Tardis HTTP API, parsing it into Nautilus instrument definitions.
 - `TardisDataClient`: Provides a live data client for subscribing to data streams from a Tardis Machine WebSocket server.
 - `TardisInstrumentProvider`: Provides instrument definitions from Tardis through the HTTP instrument metadata API.
-- **Data pipeline functions**: Enables replay of historical data from Tardis Machine and writes it to the Nautilus Parquet format, including direct catalog integration for streamlined data management (see below).
+- **Data pipeline functions**: Enables replay of historical data from Tardis Machine and writes it to the Nautilus Parquet format, including direct catalog integration for data management (see below).
 
 :::info
 A Tardis API key is required for the adapter to operate correctly. See also [environment variables](#environment-variables).
@@ -34,7 +34,7 @@ We recommend also referring to the Tardis documentation in conjunction with this
 
 ## Supported formats
 
-Tardis provides *normalized* market data—a unified format consistent across all supported exchanges.
+Tardis provides *normalized* market data, a unified format consistent across all supported exchanges.
 This normalization is highly valuable because it allows a single parser to handle data from any [Tardis-supported exchange](#venues), reducing development time and complexity.
 As a result, NautilusTrader will not support exchange-native market data formats, as it would be inefficient to implement separate parsers for each exchange at this stage.
 
@@ -77,7 +77,7 @@ This includes the following:
 
 ## Symbology and normalization
 
-The Tardis integration ensures seamless compatibility with NautilusTrader’s crypto exchange adapters
+The Tardis integration ensures compatibility with NautilusTrader’s crypto exchange adapters
 by consistently normalizing symbols. Typically, NautilusTrader uses the native exchange naming conventions
 provided by Tardis. However, for certain exchanges, raw symbols are adjusted to adhere to the Nautilus symbology normalization, as outlined below:
 
@@ -109,7 +109,7 @@ The table below outlines the mappings between Nautilus venues and corresponding 
 |:------------------------|:------------------------------------------------------|
 | `ASCENDEX`              | `ascendex`                                            |
 | `BINANCE`               | `binance`, `binance-dex`, `binance-european-options`, `binance-futures`, `binance-jersey`, `binance-options` |
-| `BINANCE_DELIVERY`      | `binance-delivery` (*COIN-margined contracts*)        |
+| `BINANCE_DELIVERY`      | `binance-delivery` (*COIN‑margined contracts*)        |
 | `BINANCE_US`            | `binance-us`                                          |
 | `BITFINEX`              | `bitfinex`, `bitfinex-derivatives`                    |
 | `BITFLYER`              | `bitflyer`                                            |
@@ -122,7 +122,7 @@ The table below outlines the mappings between Nautilus venues and corresponding 
 | `COINBASE`              | `coinbase`                                            |
 | `COINBASE_INTX`         | `coinbase-international`                              |
 | `COINFLEX`              | `coinflex` (*for historical research*)                |
-| `CRYPTO_COM`            | `crypto-com`, `crypto-com-derivatives`                |
+| `CRYPTO_COM`            | `crypto-com`                                          |
 | `CRYPTOFACILITIES`      | `cryptofacilities`                                    |
 | `DELTA`                 | `delta`                                               |
 | `DERIBIT`               | `deribit`                                             |
@@ -166,7 +166,7 @@ You can perform complete Tardis Machine WebSocket replays of historical data and
 in Nautilus Parquet format, using either Python or Rust. Since the function is implemented in Rust,
 performance is consistent whether run from Python or Rust, letting you choose based on your preferred workflow.
 
-The end-to-end `run_tardis_machine_replay` data pipeline function utilizes a specified [configuration](#configuration) to execute the following steps:
+The end-to-end `run_tardis_machine_replay` data pipeline function uses a specified [configuration](#configuration) to execute the following steps:
 
 - Connect to the Tardis Machine server.
 - Request and parse all necessary instrument definitions from the [Tardis instruments metadata](https://docs.tardis.dev/api/instruments-metadata-api) HTTP API.
@@ -182,7 +182,7 @@ Files are written one per day, per instrument, using ISO 8601 timestamp ranges t
 - **Example**: `2023-10-01T00-00-00-000000000Z_2023-10-01T23-59-59-999999999Z.parquet`
 - **Structure**: `data/{data_type}/{instrument_id}/{filename}`
 
-This format is fully compatible with the Nautilus data catalog, enabling seamless querying, consolidation, and data management operations.
+This format is fully compatible with the Nautilus data catalog, enabling querying, consolidation, and data management operations.
 
 :::note
 You can request data for the first day of each month without an API key. For all other dates, a Tardis Machine API key is required.
@@ -211,14 +211,15 @@ Next, ensure you have a configuration JSON file available.
 
 **Configuration JSON format**
 
-| Field                   | Type              | Description                                                                         | Default                                                                                               |
-|:------------------------|:------------------|:------------------------------------------------------------------------------------|:------------------------------------------------------------------------------------------------------|
-| `tardis_ws_url`         | string (optional) | The Tardis Machine WebSocket URL.                                                   | If `null` then will use the `TARDIS_MACHINE_WS_URL` env var.                                          |
-| `normalize_symbols`     | bool (optional)   | If Nautilus [symbol normalization](#symbology-and-normalization) should be applied. | If `null` then will default to `true`.                                                                |
-| `output_path`           | string (optional) | The output directory path to write Nautilus Parquet data to.                        | If `null` then will use the `NAUTILUS_PATH` env var, otherwise the current working directory. |
-| `book_snapshot_output`  | string (optional) | Output format for `book_snapshot_*` data: `"deltas"` or `"depth10"`. See [book snapshot output](#book-snapshot-output). | If `null` then will default to `"deltas"`.                                                           |
-| `ws_proxy_url`          | string (optional) | Optional WebSocket proxy URL.                                                       | If `null` then no proxy is used.                                                                      |
-| `options`               | JSON[]            | An array of [ReplayNormalizedRequestOptions](https://docs.tardis.dev/api/tardis-machine#replay-normalized-options) objects.                                                                 |
+| Field                  | Type              | Description                                                                         | Default                                                        |
+|:-----------------------|:------------------|:------------------------------------------------------------------------------------|:---------------------------------------------------------------|
+| `tardis_ws_url`        | string (optional) | The Tardis Machine WebSocket URL.                                                   | Uses `TARDIS_MACHINE_WS_URL` when `null`.                      |
+| `normalize_symbols`    | bool (optional)   | If Nautilus [symbol normalization](#symbology-and-normalization) should be applied. | Defaults to `true` when `null`.                                |
+| `output_path`          | string (optional) | The output directory path to write Nautilus Parquet data to.                        | Uses `NAUTILUS_PATH` when set, otherwise current working dir.   |
+| `book_snapshot_output` | string (optional) | Output format for `book_snapshot_*` data: `"deltas"` or `"depth10"`.                | Defaults to `"deltas"` when `null`.                            |
+| `compression`          | string (optional) | Compression for written data files: `"zstd"`, `"snappy"`, or `"uncompressed"`.      | Defaults to `"zstd"` level 3 when `null`.                      |
+| `proxy_url`            | string (optional) | Optional proxy URL for the Tardis HTTP API client.                                  | No proxy when `null`.                                          |
+| `options`              | JSON[]            | Replay normalized request option objects.                                           | Required.                                                      |
 
 An example configuration file, `example_config.json`, is available [here](https://github.com/nautechsystems/nautilus_trader/blob/develop/crates/adapters/tardis/bin/example_config.json):
 
@@ -680,6 +681,15 @@ If you anticipate frequent subscription and unsubscription of data, it is recomm
 `ws_connection_delay_secs` to zero. This will create a new client for each initial subscription,
 allowing them to be later closed individually upon unsubscription.
 :::
+
+## Trade ID derivation
+
+Trade ticks use the venue-provided trade ID from the Tardis message or CSV row
+as the `TradeId`. When the venue omits the trade ID (empty string or null on
+some exchanges), both the WebSocket parser and CSV parser fall back to a
+deterministic FNV-1a hash of the symbol, timestamp, price, amount, and side.
+The same venue event yields the same trade ID across replays, keeping
+downstream dedup intact.
 
 ## Limitations and considerations
 

@@ -29,12 +29,13 @@ use std::{
 };
 
 use nautilus_core::{UnixNanos, correctness::FAILED};
+use serde::{Deserialize, Serialize};
 use ustr::Ustr;
 
 use crate::{
     actor::{
         Actor,
-        registry::{get_actor_unchecked, register_actor},
+        registry::{get_actor_unchecked, register_actor, try_get_actor_unchecked},
     },
     clock::Clock,
     msgbus::{self, Endpoint, Handler, MStr, ShareableMessageHandler},
@@ -42,7 +43,8 @@ use crate::{
 };
 
 /// Represents a throttling limit per interval.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RateLimit {
     pub limit: usize,
     pub interval_ns: u64,
@@ -130,7 +132,7 @@ where
         limit: usize,
         interval: u64,
         clock: Rc<RefCell<dyn Clock>>,
-        timer_name: String,
+        timer_name: &str,
         output_send: F,
         output_drop: Option<F>,
         actor_id: Ustr,
@@ -141,10 +143,10 @@ where
             is_limiting: false,
             limit,
             buffer: VecDeque::new(),
-            timestamps: VecDeque::with_capacity(limit),
+            timestamps: VecDeque::with_capacity(limit.min(1024)),
             clock,
             interval,
-            timer_name: Ustr::from(&timer_name),
+            timer_name: Ustr::from(timer_name),
             output_send,
             output_drop,
             actor_id,
@@ -254,21 +256,28 @@ where
 
     #[inline]
     pub fn limit_msg(&mut self, msg: T) {
-        let callback = if self.output_drop.is_none() {
+        if self.output_drop.is_none() {
             self.buffer.push_front(msg);
             log::debug!("Buffering {}", self.buffer.len());
-            Some(ThrottlerProcess::<T, F>::new(self.actor_id).get_timer_callback())
+
+            if !self.is_limiting {
+                log::debug!("Limiting");
+                let cb = Some(ThrottlerProcess::<T, F>::new(self.actor_id).get_timer_callback());
+                self.set_timer(cb);
+                self.is_limiting = true;
+            }
         } else {
             log::debug!("Dropping");
+
             if let Some(drop) = &self.output_drop {
                 drop(msg);
             }
-            Some(throttler_resume::<T, F>(self.actor_id))
-        };
-        if !self.is_limiting {
-            log::debug!("Limiting");
-            self.set_timer(callback);
-            self.is_limiting = true;
+
+            if !self.is_limiting {
+                log::debug!("Limiting");
+                self.set_timer(Some(throttler_resume::<T, F>(self.actor_id)));
+                self.is_limiting = true;
+            }
         }
     }
 
@@ -280,7 +289,17 @@ where
     {
         self.recv_count += 1;
 
-        if self.is_limiting || self.delta_next() > 0 {
+        let delta = self.delta_next();
+
+        // Auto-reset when the rate window has passed but no timer callback
+        // arrived (e.g. for embedded throttlers not registered as actors).
+        // Gated on an empty buffer so buffered throttlers keep draining via
+        // ThrottlerProcess; only drop-mode throttlers have an empty buffer here.
+        if self.is_limiting && delta == 0 && self.buffer.is_empty() {
+            self.is_limiting = false;
+        }
+
+        if self.is_limiting || delta > 0 {
             self.limit_msg(msg);
         } else {
             self.send_msg(msg);
@@ -355,15 +374,20 @@ where
     }
 }
 
-/// Sets throttler to resume sending messages
+/// Sets throttler to resume sending messages.
+///
+/// Uses `try_get_actor_unchecked` so that embedded throttlers (not registered
+/// in the actor registry) are handled gracefully. The `send()` auto-reset
+/// ensures such throttlers recover once the rate window passes.
 pub fn throttler_resume<T, F>(actor_id: Ustr) -> TimeEventCallback
 where
     T: 'static + Debug,
     F: Fn(T) + 'static,
 {
     TimeEventCallback::from(move |_event: TimeEvent| {
-        let mut throttler = get_actor_unchecked::<Throttler<T, F>>(&actor_id);
-        throttler.is_limiting = false;
+        if let Some(mut throttler) = try_get_actor_unchecked::<Throttler<T, F>>(&actor_id) {
+            throttler.is_limiting = false;
+        }
     })
 }
 
@@ -395,7 +419,7 @@ mod tests {
 
     #[allow(unsafe_code)]
     impl TestThrottler {
-        #[allow(clippy::mut_from_ref)]
+        #[expect(clippy::mut_from_ref)]
         pub fn get_throttler(&self) -> &mut Throttler<u64, Box<dyn Fn(u64)>> {
             unsafe { &mut *self.throttler.get() }
         }
@@ -417,7 +441,7 @@ mod tests {
                 rate_limit.limit,
                 rate_limit.interval_ns,
                 clock,
-                "buffer_timer".to_string(),
+                "buffer_timer",
                 output_send,
                 None,
                 actor_id,
@@ -447,7 +471,7 @@ mod tests {
                 rate_limit.limit,
                 rate_limit.interval_ns,
                 clock,
-                "dropper_timer".to_string(),
+                "dropper_timer",
                 output_send,
                 Some(output_drop),
                 actor_id,
@@ -735,7 +759,7 @@ mod tests {
         prop::collection::vec(throttler_input_strategy(), 10..=150)
     }
 
-    fn test_throttler_with_inputs(inputs: Vec<ThrottlerInput>, test_throttler: TestThrottler) {
+    fn test_throttler_with_inputs(inputs: Vec<ThrottlerInput>, test_throttler: &TestThrottler) {
         let test_clock = test_throttler.clock.clone();
         let interval = test_throttler.interval;
         let throttler = test_throttler.get_throttler();
@@ -777,15 +801,23 @@ mod tests {
             assert_eq!(sent_count, throttler.sent_count + throttler.qsize());
         }
 
-        // Advance clock by a large amount to process all messages
-        let time_events = test_clock
-            .borrow_mut()
-            .advance_time((interval * 100).into(), true);
-        let mut clock_ref = test_clock.borrow_mut();
-        for each_event in clock_ref.match_handlers(time_events) {
-            drop(clock_ref);
-            each_event.callback.call(each_event.event);
-            clock_ref = test_clock.borrow_mut();
+        // Drain all buffered messages by repeatedly advancing the clock.
+        // Each timer callback may send up to `limit` messages and schedule
+        // a new timer for the next batch, so we must keep advancing.
+        for i in 1..=100u64 {
+            if throttler.qsize() == 0 {
+                break;
+            }
+            let advance_to = interval * 100 * i;
+            let time_events = test_clock
+                .borrow_mut()
+                .advance_time(advance_to.into(), true);
+            let mut clock_ref = test_clock.borrow_mut();
+            for each_event in clock_ref.match_handlers(time_events) {
+                drop(clock_ref);
+                each_event.callback.call(each_event.event);
+                clock_ref = test_clock.borrow_mut();
+            }
         }
         assert_eq!(throttler.qsize(), 0);
     }
@@ -796,7 +828,7 @@ mod tests {
         // even when tests panic (which would skip the reset code)
         proptest!(|(inputs in throttler_test_strategy())| {
             let test_throttler = test_throttler_buffered();
-            test_throttler_with_inputs(inputs, test_throttler);
+            test_throttler_with_inputs(inputs, &test_throttler);
         });
     }
 

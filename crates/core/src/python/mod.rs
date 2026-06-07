@@ -13,13 +13,17 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-#![allow(clippy::doc_markdown, reason = "Python docstrings")]
+#![expect(clippy::doc_markdown, reason = "Python docstrings")]
 
 //! Python bindings and interoperability built using [`PyO3`](https://pyo3.rs).
 
 #![allow(
     deprecated,
     reason = "pyo3-stub-gen currently relies on PyO3 initialization helpers marked as deprecated"
+)]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "errors documented on underlying Rust methods"
 )]
 //!
 //! This sub-module groups together the Rust code that is *only* required when compiling the
@@ -75,11 +79,6 @@ use crate::{
 /// - Avoid circular references between Rust and Python memory management.
 /// - Ensure proper Python reference counting under the GIL.
 /// - Allow both Rust and Python garbage collectors to work correctly.
-///
-/// # Safety
-///
-/// This function properly acquires the Python GIL before performing the clone operation,
-/// ensuring thread-safe access to the Python object and correct reference counting.
 #[must_use]
 pub fn clone_py_object(obj: &Py<PyAny>) -> Py<PyAny> {
     Python::attach(|py| obj.clone_ref(py))
@@ -89,6 +88,22 @@ pub fn clone_py_object(obj: &Py<PyAny>) -> Py<PyAny> {
 pub fn call_python(py: Python, callback: &Py<PyAny>, py_obj: Py<PyAny>) {
     if let Err(e) = callback.call1(py, (py_obj,)) {
         log::error!("Error calling Python: {e}");
+    }
+}
+
+/// Schedules a Python callback on the event loop thread via `call_soon_threadsafe`.
+///
+/// This must be used instead of [`call_python`] when invoking Python callbacks
+/// from Tokio worker threads, since Python callbacks that enter the kernel
+/// (e.g. via `MessageBus.send`) must run on the asyncio event loop thread.
+pub fn call_python_threadsafe(
+    py: Python,
+    call_soon: &Py<PyAny>,
+    callback: &Py<PyAny>,
+    py_obj: Py<PyAny>,
+) {
+    if let Err(e) = call_soon.call1(py, (callback, py_obj)) {
+        log::error!("Error scheduling Python callback on event loop: {e}");
     }
 }
 
@@ -155,12 +170,12 @@ pub fn to_pynotimplemented_err(e: impl Display) -> PyErr {
 /// obj : Any
 ///     The object to check.
 ///
-/// Returns
-/// -------
+/// # Returns
+///
 /// bool
-#[gen_stub_pyfunction(module = "nautilus_trader.core")]
 #[pyfunction(name = "is_pycapsule")]
-#[allow(
+#[gen_stub_pyfunction(module = "nautilus_trader.core")]
+#[expect(
     clippy::needless_pass_by_value,
     reason = "Python FFI requires owned types"
 )]

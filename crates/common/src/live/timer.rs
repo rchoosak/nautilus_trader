@@ -42,7 +42,7 @@ use ustr::Ustr;
 use super::runtime::get_runtime;
 use crate::{
     runner::TimeEventSender,
-    timer::{TimeEvent, TimeEventCallback, TimeEventHandler},
+    timer::{TimeEvent, TimeEventCallback, TimeEventHandler, Timer},
 };
 
 /// A live timer for use with a `LiveClock`.
@@ -77,7 +77,6 @@ impl LiveTimer {
     /// # Panics
     ///
     /// Panics if `name` is not a valid string.
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         name: Ustr,
@@ -210,7 +209,7 @@ impl LiveTimer {
             let mut timer = tokio::time::interval_at(start, Duration::from_nanos(interval_ns));
 
             loop {
-                // SAFETY: `timer.tick` is cancellation safe, if the cancel branch completes
+                // `timer.tick` is cancellation safe, if the cancel branch completes
                 // first then no tick has been consumed (no event was ready).
                 timer.tick().await;
                 let now_ns = clock.get_time_ns();
@@ -262,9 +261,22 @@ impl LiveTimer {
     /// The timer will not generate a final event.
     pub fn cancel(&mut self) {
         log::debug!("Cancel timer '{}'", self.name);
+
         if let Some(ref handle) = self.task_handle {
             handle.abort();
         }
+    }
+}
+
+impl Timer for LiveTimer {
+    fn is_expired(&self) -> bool {
+        self.task_handle
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+    }
+
+    fn cancel(&mut self) {
+        Self::cancel(self);
     }
 }
 
@@ -296,7 +308,9 @@ fn call_python_with_time_event(event: TimeEvent, callback: &Py<PyAny>) {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use nautilus_core::{UnixNanos, time::get_atomic_clock_realtime};
+    use nautilus_core::{
+        UnixNanos, datetime::floor_to_nearest_microsecond, time::get_atomic_clock_realtime,
+    };
     use rstest::*;
     use ustr::Ustr;
 
@@ -368,7 +382,10 @@ mod tests {
 
         timer.start();
 
-        assert!(timer.next_time_ns() >= before);
+        // `next_time_ns` is floored to microsecond precision, so compare against
+        // the same floor applied to the baseline
+        let before_floored = UnixNanos::from(floor_to_nearest_microsecond(before.as_u64()));
+        assert!(timer.next_time_ns() >= before_floored);
 
         timer.cancel();
     }

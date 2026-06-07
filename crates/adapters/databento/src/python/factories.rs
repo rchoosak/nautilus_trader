@@ -21,22 +21,51 @@ use nautilus_core::{python::to_pyruntime_err, time::get_atomic_clock_realtime};
 use nautilus_model::identifiers::ClientId;
 use pyo3::prelude::*;
 
-use crate::{data::DatabentoDataClient, factories::DatabentoDataClientFactory};
+use crate::{
+    data::DatabentoDataClient,
+    factories::{DatabentoDataClientFactory, DatabentoLiveClientConfig},
+};
 
-#[cfg(feature = "python")]
 #[pymethods]
-impl DatabentoDataClientFactory {
-    /// Creates a new [`DatabentoDataClientFactory`] instance.
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
+impl DatabentoLiveClientConfig {
+    /// Configuration for Databento data clients used with `LiveNode`.
     #[new]
-    pub fn py_new() -> Self {
+    #[pyo3(signature = (api_key, publishers_filepath, use_exchange_as_venue=false, bars_timestamp_on_close=true))]
+    fn py_new(
+        api_key: String,
+        publishers_filepath: std::path::PathBuf,
+        use_exchange_as_venue: bool,
+        bars_timestamp_on_close: bool,
+    ) -> Self {
+        Self::new(
+            api_key,
+            publishers_filepath,
+            use_exchange_as_venue,
+            bars_timestamp_on_close,
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{self:?}")
+    }
+}
+
+#[pymethods]
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
+impl DatabentoDataClientFactory {
+    /// Factory for creating Databento data clients.
+    #[new]
+    fn py_new() -> Self {
         Self
     }
 
-    /// Creates a live data client.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `PyErr` if client creation fails.
+    #[pyo3(name = "name")]
+    fn py_name(&self) -> &'static str {
+        "DATABENTO"
+    }
+
+    /// Creates a new `DatabentoDataClient` instance.
     #[staticmethod]
     #[pyo3(signature = (client_id, api_key, publishers_filepath, use_exchange_as_venue = true, bars_timestamp_on_close = true))]
     pub fn py_create_live_data_client(
@@ -46,7 +75,7 @@ impl DatabentoDataClientFactory {
         use_exchange_as_venue: bool,
         bars_timestamp_on_close: bool,
     ) -> PyResult<DatabentoDataClient> {
-        DatabentoDataClientFactory::create_live_data_client(
+        Self::create_live_data_client(
             client_id,
             api_key,
             publishers_filepath,

@@ -101,6 +101,7 @@ impl PostRouter {
             let mut map = self.inner.lock().await;
             map.remove(&id)
         };
+
         if let Some(waiter) = waiter {
             if waiter.tx.send(resp).is_err() {
                 log::warn!("Post waiter dropped before delivery: id={id}");
@@ -266,6 +267,7 @@ pub fn lane_for_action(action: &ActionRequest) -> PostLane {
                     }
                 )
             });
+
             if all_alo {
                 PostLane::Alo
             } else {
@@ -338,14 +340,14 @@ impl OrderBuilder {
     }
 
     /// Create a limit order with individual parameters (legacy method)
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[must_use]
     pub fn push_limit(
         self,
         asset: u32,
         is_buy: bool,
-        px: impl ToString,
-        sz: impl ToString,
+        px: &(impl ToString + ?Sized),
+        sz: &(impl ToString + ?Sized),
         reduce_only: bool,
         tif: TimeInForceRequest,
         cloid: Option<String>,
@@ -378,17 +380,17 @@ impl OrderBuilder {
     }
 
     /// Create a trigger order with individual parameters (legacy method)
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[must_use]
     pub fn push_trigger(
         self,
         asset: u32,
         is_buy: bool,
-        px: impl ToString,
-        sz: impl ToString,
+        px: &(impl ToString + ?Sized),
+        sz: &(impl ToString + ?Sized),
         reduce_only: bool,
         is_market: bool,
-        trigger_px: impl ToString,
+        trigger_px: &(impl ToString + ?Sized),
         tpsl: TpSlRequest,
         cloid: Option<String>,
     ) -> Self {
@@ -520,6 +522,7 @@ pub fn info_order_status(user: &str, oid: u64) -> PostRequest {
 pub fn info_open_orders(user: &str, frontend: Option<bool>) -> PostRequest {
     let mut body =
         serde_json::json!({"type": HyperliquidInfoRequestType::OpenOrders.as_str(), "user": user});
+
     if let Some(fe) = frontend {
         body["frontend"] = serde_json::json!(fe);
     }
@@ -529,6 +532,7 @@ pub fn info_open_orders(user: &str, frontend: Option<bool>) -> PostRequest {
 pub fn info_user_fills(user: &str, aggregate_by_time: Option<bool>) -> PostRequest {
     let mut body =
         serde_json::json!({"type": HyperliquidInfoRequestType::UserFills.as_str(), "user": user});
+
     if let Some(agg) = aggregate_by_time {
         body["aggregateByTime"] = serde_json::json!(agg);
     }
@@ -587,6 +591,7 @@ pub fn classify_action_payload(payload: &serde_json::Value) -> ActionOutcome<'_>
         }
         return ActionOutcome::Resting { oid };
     }
+
     if let (Some(total_sz), Some(avg_px)) = (
         payload.get("totalSz").and_then(|v| v.as_str()),
         payload.get("avgPx").and_then(|v| v.as_str()),
@@ -597,6 +602,7 @@ pub fn classify_action_payload(payload: &serde_json::Value) -> ActionOutcome<'_>
             oid: None,
         };
     }
+
     if let Some(msg) = payload
         .get("error")
         .and_then(|v| v.as_str())
@@ -1011,7 +1017,7 @@ mod tests {
         )
         .await;
 
-        let got = sent.lock().await.clone();
-        assert_eq!(got, vec![1, 2, 3, 4, 5]);
+        let actual = sent.lock().await.clone();
+        assert_eq!(actual, vec![1, 2, 3, 4, 5]);
     }
 }

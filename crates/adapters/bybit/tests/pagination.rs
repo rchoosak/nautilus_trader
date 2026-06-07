@@ -13,7 +13,7 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! Comprehensive pagination tests for Bybit adapter.
+//! Pagination tests for Bybit adapter.
 //!
 //! This test suite covers pagination for:
 //! 1. Market Data (bars/klines) - chronological ordering, multi-page fetching
@@ -24,7 +24,7 @@ use std::{collections::HashMap, net::SocketAddr};
 use axum::{Router, extract::Query, response::Json, routing::get};
 use chrono::{DateTime, Duration, Utc};
 use nautilus_bybit::{
-    common::{enums::BybitProductType, parse::parse_linear_instrument},
+    common::{consts::BYBIT_VENUE, enums::BybitProductType, parse::parse_linear_instrument},
     http::{
         client::BybitHttpClient,
         models::{
@@ -37,11 +37,11 @@ use nautilus_bybit::{
 use nautilus_model::{
     data::{BarSpecification, BarType},
     enums::{AggregationSource, BarAggregation, PriceType},
-    identifiers::{InstrumentId, Symbol, Venue},
+    identifiers::{InstrumentId, Symbol},
 };
 use rstest::rstest;
 use serde_json::{Value, json};
-use tokio::{net::TcpListener, sync::OnceCell};
+use tokio::net::TcpListener;
 
 // Generate mock kline data with timestamps
 fn generate_kline(timestamp_ms: i64, open: &str, high: &str, low: &str, close: &str) -> Value {
@@ -66,6 +66,7 @@ async fn mock_klines_paginated(Query(params): Query<HashMap<String, String>>) ->
     // Generate bars going backwards from end_ms
     // Each bar is 1 minute apart
     let mut klines = Vec::new();
+
     for i in 0..1000 {
         let bar_time = end_ms - (i * 60_000);
         klines.push(generate_kline(
@@ -147,38 +148,26 @@ async fn start_pagination_test_server() -> Result<SocketAddr, anyhow::Error> {
     Ok(addr)
 }
 
-static INSTRUMENT_CACHE: OnceCell<()> = OnceCell::const_new();
-
 async fn init_instrument_cache(client: &BybitHttpClient) {
-    INSTRUMENT_CACHE
-        .get_or_init(|| async {
-            // Load instruments and manually add to cache
-            let mut params = BybitInstrumentsInfoParamsBuilder::default();
-            params.category(BybitProductType::Linear);
-            params.symbol("ETHUSDT".to_string());
-            let params = params.build().unwrap();
+    let mut params = BybitInstrumentsInfoParamsBuilder::default();
+    params.category(BybitProductType::Linear);
+    params.symbol("ETHUSDT".to_string());
+    let params = params.build().unwrap();
 
-            if let Ok(response) = client.get_instruments_linear(&params).await {
-                use nautilus_core::time::get_atomic_clock_realtime;
-                let ts_init = get_atomic_clock_realtime().get_time_ns();
-                for definition in response.result.list {
-                    // Create a default fee rate for testing
-                    let fee_rate = BybitFeeRate {
-                        symbol: definition.symbol,
-                        taker_fee_rate: "0.00055".to_string(),
-                        maker_fee_rate: "0.0001".to_string(),
-                        base_coin: Some(definition.base_coin),
-                    };
+    let response = client.get_instruments_linear(&params).await.unwrap();
+    let ts_init = nautilus_core::time::get_atomic_clock_realtime().get_time_ns();
 
-                    if let Ok(instrument) =
-                        parse_linear_instrument(&definition, &fee_rate, ts_init, ts_init)
-                    {
-                        client.cache_instrument(instrument);
-                    }
-                }
-            }
-        })
-        .await;
+    for definition in response.result.list {
+        let fee_rate = BybitFeeRate {
+            symbol: definition.symbol,
+            taker_fee_rate: "0.00055".to_string(),
+            maker_fee_rate: "0.0001".to_string(),
+            base_coin: Some(definition.base_coin),
+        };
+
+        let instrument = parse_linear_instrument(&definition, &fee_rate, ts_init, ts_init).unwrap();
+        client.cache_instrument(instrument);
+    }
 }
 
 #[rstest]
@@ -187,11 +176,10 @@ async fn test_bars_chronological_order_single_page() {
     let addr = start_pagination_test_server().await.unwrap();
     let base_url = format!("http://{addr}");
 
-    let client =
-        BybitHttpClient::new(Some(base_url), Some(60), None, None, None, None, None).unwrap();
+    let client = BybitHttpClient::new(Some(base_url), 60, 3, 1000, 10_000, 5_000, None).unwrap();
     init_instrument_cache(&client).await;
 
-    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), Venue::from("BYBIT"));
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
     let bar_spec = BarSpecification {
         step: std::num::NonZero::new(1).unwrap(),
         aggregation: BarAggregation::Minute,
@@ -236,11 +224,10 @@ async fn test_bars_chronological_order_multiple_pages() {
     let addr = start_pagination_test_server().await.unwrap();
     let base_url = format!("http://{addr}");
 
-    let client =
-        BybitHttpClient::new(Some(base_url), Some(60), None, None, None, None, None).unwrap();
+    let client = BybitHttpClient::new(Some(base_url), 60, 3, 1000, 10_000, 5_000, None).unwrap();
     init_instrument_cache(&client).await;
 
-    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), Venue::from("BYBIT"));
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
     let bar_spec = BarSpecification {
         step: std::num::NonZero::new(1).unwrap(),
         aggregation: BarAggregation::Minute,
@@ -288,11 +275,10 @@ async fn test_bars_limit_returns_most_recent() {
     let addr = start_pagination_test_server().await.unwrap();
     let base_url = format!("http://{addr}");
 
-    let client =
-        BybitHttpClient::new(Some(base_url), Some(60), None, None, None, None, None).unwrap();
+    let client = BybitHttpClient::new(Some(base_url), 60, 3, 1000, 10_000, 5_000, None).unwrap();
     init_instrument_cache(&client).await;
 
-    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), Venue::from("BYBIT"));
+    let instrument_id = InstrumentId::new(Symbol::from("ETHUSDT-LINEAR"), *BYBIT_VENUE);
     let bar_spec = BarSpecification {
         step: std::num::NonZero::new(1).unwrap(),
         aggregation: BarAggregation::Minute,

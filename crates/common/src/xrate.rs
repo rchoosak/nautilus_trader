@@ -51,6 +51,7 @@ pub fn get_exchange_rate(
     if quotes_bid.is_empty() || quotes_ask.is_empty() {
         anyhow::bail!("Quote maps must not be empty");
     }
+
     if quotes_bid.len() != quotes_ask.len() {
         anyhow::bail!("Quote maps must have equal lengths");
     }
@@ -61,6 +62,7 @@ pub fn get_exchange_rate(
         PriceType::Ask => quotes_ask,
         PriceType::Mid => {
             let mut mid_quotes = AHashMap::new();
+
             for (pair, bid) in &quotes_bid {
                 let ask = quotes_ask
                     .get(pair)
@@ -96,6 +98,7 @@ pub fn get_exchange_rate(
         if current == to_currency {
             return Ok(Some(current_rate));
         }
+
         if let Some(neighbors) = graph.get(&current) {
             for (neighbor, rate) in neighbors {
                 if visited.insert(*neighbor) {
@@ -218,6 +221,7 @@ mod tests {
             quotes_ask,
         )
         .unwrap();
+
         if let (Some(eur_usd), Some(usd_eur)) = (rate_eur_usd, rate_usd_eur) {
             assert!(eur_usd.mul_add(usd_eur, -1.0).abs() < 0.0001);
         } else {
@@ -240,6 +244,7 @@ mod tests {
         let mid_eur_usd = f64::midpoint(1.1000, 1.1002);
         let mid_usd_jpy = f64::midpoint(110.00, 110.02);
         let expected = mid_eur_usd * mid_usd_jpy;
+
         if let Some(val) = rate {
             assert!((val - expected).abs() < 0.1);
         } else {

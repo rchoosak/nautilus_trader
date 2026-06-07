@@ -129,6 +129,18 @@ class TestBacktestEngine:
         assert engine.iteration == 0
         assert engine.get_log_guard() is None  # Logging bypassed
 
+    def test_dispose_disposes_emulator(self):
+        # Arrange
+        engine = BacktestEngine(BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+        emulator = engine.kernel.emulator
+        assert not emulator.is_disposed
+
+        # Act
+        engine.dispose()
+
+        # Assert
+        assert emulator.is_disposed
+
     def test_reset_engine(self):
         # Arrange
         self.engine.run()
@@ -300,10 +312,14 @@ class TestBacktestEngine:
         engine.run()
 
         # Assert
-        msg = messages[10]
-        assert msg.__class__.__name__ == "SignalCounter"
-        assert msg.ts_init == 1359676800000000000
-        assert msg.ts_event == 1359676800000000000
+        expected_ts = 1359676800000000000
+        msg = next(
+            m
+            for m in messages
+            if m.__class__.__name__ == "SignalCounter" and m.ts_event == expected_ts
+        )
+        assert msg.ts_init == expected_ts
+        assert msg.ts_event == expected_ts
 
     def test_set_instance_id(self):
         # Arrange
@@ -1040,6 +1056,7 @@ class TestBacktestEngineStreaming:
         def sparse_generator():
             # Create data with increasing gaps between items
             ts = start_ts
+
             for i in range(count):
                 yield [
                     MyData(
@@ -1360,6 +1377,7 @@ class TestBacktestEngineStreaming:
                     base_ts = start_ts + (
                         chunk * chunk_size * 3_600_000_000_000
                     )  # 1 hour per chunk
+
                     for i in range(chunk_size):
                         chunk_data.append(
                             MyData(
@@ -1715,3 +1733,170 @@ class TestBacktestEngineDataSorting:
         self.engine.add_strategy(Strategy())
         self.engine.run()
         assert self.engine.iteration == len(sorted_bars)
+
+
+class BarSubscriberStrategy(Strategy):
+    """
+    Strategy that subscribes to time bars for testing.
+    """
+
+    def __init__(self, bar_type):
+        super().__init__()
+        self._bar_type = bar_type
+
+    def on_start(self):
+        self.subscribe_bars(self._bar_type)
+
+
+class BarResubscriberStrategy(Strategy):
+    """
+    Strategy that unsubscribes and re-subscribes to the same internal bar type.
+    """
+
+    def __init__(self, bar_type):
+        super().__init__()
+        self._bar_type = bar_type
+        self.received_bars = []
+        self.resubscribe_count = 0
+
+    def on_start(self):
+        self.subscribe_bars(self._bar_type)
+
+    def on_bar(self, bar):
+        if bar.bar_type != self._bar_type:
+            return
+
+        self.received_bars.append(bar)
+
+        if len(self.received_bars) == 2 and self.resubscribe_count == 0:
+            self.unsubscribe_bars(self._bar_type)
+            self.subscribe_bars(self._bar_type)
+            self.resubscribe_count += 1
+
+
+class TestBacktestEngineStreamingBars:
+    def setup_method(self):
+        self.instrument = TestInstrumentProvider.default_fx_ccy("USD/JPY")
+        self.engine = BacktestEngine(
+            BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)),
+        )
+        self.engine.add_venue(
+            venue=Venue("SIM"),
+            oms_type=OmsType.HEDGING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            fill_model=FillModel(),
+        )
+        self.engine.add_instrument(self.instrument)
+
+    def teardown_method(self):
+        self.engine.dispose()
+
+    def _make_quotes(self, instrument, start_s, end_s):
+        from nautilus_trader.model.data import QuoteTick
+
+        return [
+            QuoteTick(
+                instrument_id=instrument.id,
+                bid_price=Price.from_str("100.000"),
+                ask_price=Price.from_str("100.010"),
+                bid_size=Quantity.from_int(1000),
+                ask_size=Quantity.from_int(1000),
+                ts_event=i * 1_000_000_000,
+                ts_init=i * 1_000_000_000,
+            )
+            for i in range(start_s, end_s + 1)
+        ]
+
+    def test_streaming_no_dummy_bars_past_batch_data(self):
+        bar_type = BarType(
+            instrument_id=self.instrument.id,
+            bar_spec=BarSpecification(5, BarAggregation.SECOND, PriceType.MID),
+            aggregation_source=AggregationSource.INTERNAL,
+        )
+        self.engine.add_strategy(BarSubscriberStrategy(bar_type))
+
+        batch1 = self._make_quotes(self.instrument, 1, 10)
+        self.engine.add_data(batch1)
+
+        # Run with end far past data (100s), streaming=True.
+        # Without the fix, timers fire from 10s to 100s producing ~18 dummy bars.
+        # With the fix, only bars from the actual data period are built.
+        self.engine.run(
+            end=pd.Timestamp("1970-01-01 00:01:40", tz="UTC"),
+            streaming=True,
+        )
+
+        bars = self.engine.kernel.cache.bars(bar_type) or []
+        assert len(bars) <= 2, (
+            f"Expected at most 2 bars from 10s of data with 5s bars, found {len(bars)}"
+        )
+
+        # Batch 2: continues from where batch 1 left off (20s to 30s).
+        # Gap bars (10-20s) fire naturally when time advances to batch 2.
+        self.engine.clear_data()
+        batch2 = self._make_quotes(self.instrument, 20, 30)
+        self.engine.add_data(batch2)
+
+        self.engine.run(
+            end=pd.Timestamp("1970-01-01 00:00:30", tz="UTC"),
+            streaming=False,
+        )
+
+        bars = self.engine.kernel.cache.bars(bar_type) or []
+        assert len(bars) <= 6, f"Expected at most 6 bars across both batches, found {len(bars)}"
+
+    def test_streaming_end_flushes_tail_timers(self):
+        bar_type = BarType(
+            instrument_id=self.instrument.id,
+            bar_spec=BarSpecification(5, BarAggregation.SECOND, PriceType.MID),
+            aggregation_source=AggregationSource.INTERNAL,
+        )
+        self.engine.add_strategy(BarSubscriberStrategy(bar_type))
+
+        batch = self._make_quotes(self.instrument, 1, 10)
+        self.engine.add_data(batch)
+
+        # Node-style workflow: all batches use streaming=True, finalize with end()
+        self.engine.run(
+            end=pd.Timestamp("1970-01-01 00:00:20", tz="UTC"),
+            streaming=True,
+        )
+
+        bars_before_end = self.engine.kernel.cache.bars(bar_type) or []
+        assert len(bars_before_end) <= 2, (
+            f"Expected at most 2 bars before end(), found {len(bars_before_end)}"
+        )
+
+        # end() should flush tail timers up to end_ns (20s),
+        # producing gap bars between 10s and 20s
+        self.engine.end()
+
+        bars_after_end = self.engine.kernel.cache.bars(bar_type) or []
+        assert len(bars_after_end) > len(bars_before_end), (
+            f"end() should have flushed tail timers, but bar count unchanged: {len(bars_after_end)}"
+        )
+        assert len(bars_after_end) <= 4, (
+            f"Expected at most 4 bars after end() flush to 20s, found {len(bars_after_end)}"
+        )
+
+    def test_internal_bar_resubscribe_after_unsubscribe_does_not_raise(self):
+        bar_type = BarType(
+            instrument_id=self.instrument.id,
+            bar_spec=BarSpecification(1, BarAggregation.SECOND, PriceType.MID),
+            aggregation_source=AggregationSource.INTERNAL,
+        )
+        strategy = BarResubscriberStrategy(bar_type)
+        self.engine.add_strategy(strategy)
+
+        batch = self._make_quotes(self.instrument, 1, 10)
+        self.engine.add_data(batch)
+
+        self.engine.run(
+            end=pd.Timestamp("1970-01-01 00:00:10", tz="UTC"),
+            streaming=False,
+        )
+
+        assert strategy.resubscribe_count == 1
+        assert len(strategy.received_bars) >= 3

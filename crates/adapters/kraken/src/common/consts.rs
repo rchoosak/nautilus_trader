@@ -17,11 +17,18 @@
 
 use std::sync::LazyLock;
 
-use nautilus_model::identifiers::Venue;
+use nautilus_model::identifiers::{ClientId, Venue};
 use ustr::Ustr;
 
+/// Venue identifier string.
 pub const KRAKEN: &str = "KRAKEN";
+
+/// Static venue instance.
 pub static KRAKEN_VENUE: LazyLock<Venue> = LazyLock::new(|| Venue::new(Ustr::from(KRAKEN)));
+
+/// Static client ID instance.
+pub static KRAKEN_CLIENT_ID: LazyLock<ClientId> =
+    LazyLock::new(|| ClientId::new(Ustr::from(KRAKEN)));
 
 // API Partner integration identifier
 pub const NAUTILUS_KRAKEN_BROKER_ID: &str = "AA98 N84G GOPN GL6Y";
@@ -34,6 +41,7 @@ pub const KRAKEN_WS_TOPIC_DELIMITER: char = '.';
 pub const KRAKEN_SPOT_HTTP_URL: &str = "https://api.kraken.com";
 pub const KRAKEN_SPOT_WS_PUBLIC_URL: &str = "wss://ws.kraken.com/v2";
 pub const KRAKEN_SPOT_WS_PRIVATE_URL: &str = "wss://ws-auth.kraken.com/v2";
+pub const KRAKEN_SPOT_WS_L3_URL: &str = "wss://ws-l3.kraken.com/v2";
 
 // Futures API URLs
 pub const KRAKEN_FUTURES_HTTP_URL: &str = "https://futures.kraken.com";
@@ -42,3 +50,12 @@ pub const KRAKEN_FUTURES_WS_URL: &str = "wss://futures.kraken.com/ws/v1";
 // Demo URLs
 pub const KRAKEN_FUTURES_DEMO_HTTP_URL: &str = "https://demo-futures.kraken.com";
 pub const KRAKEN_FUTURES_DEMO_WS_URL: &str = "wss://demo-futures.kraken.com/ws/v1";
+
+// Spot order flags (oflags parameter values)
+pub const KRAKEN_OFLAG_POST_ONLY: &str = "post";
+pub const KRAKEN_OFLAG_QUOTE_QUANTITY: &str = "viqc";
+
+// Post-only rejection reason strings
+pub const KRAKEN_FUTURES_POST_ONLY_REJECT: &str = "post_order_failed_because_it_would_filled";
+pub const KRAKEN_SPOT_POST_ONLY_REJECT: &str = "Post only order";
+pub const KRAKEN_SPOT_POST_ONLY_ERROR: &str = "EOrder:Post only order";

@@ -19,7 +19,6 @@ use ahash::AHashMap;
 use bytes::Bytes;
 use nautilus_common::{
     cache::database::{CacheDatabaseAdapter, CacheMap},
-    custom::CustomData,
     live::get_runtime,
     logging::{log_task_awaiting, log_task_started, log_task_stopped},
     signal::Signal,
@@ -27,7 +26,7 @@ use nautilus_common::{
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     accounts::AccountAny,
-    data::{Bar, DataType, FundingRateUpdate, QuoteTick, TradeTick},
+    data::{Bar, CustomData, DataType, FundingRateUpdate, QuoteTick, TradeTick},
     events::{OrderEventAny, OrderSnapshot, position::snapshot::PositionSnapshot},
     identifiers::{
         AccountId, ClientId, ClientOrderId, ComponentId, InstrumentId, PositionId, StrategyId,
@@ -62,7 +61,10 @@ pub struct PostgresCacheDatabase {
     handle: tokio::task::JoinHandle<()>,
 }
 
-#[allow(clippy::large_enum_variant)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "variant sizes vary with feature unification; allow stays silent when the lint does not fire"
+)]
 #[derive(Debug, Clone)]
 pub enum DatabaseQuery {
     Close,
@@ -140,6 +142,7 @@ impl PostgresCacheDatabase {
                         buffer_interval,
                         &pool,
                     ).await;
+
                     if result.is_break() {
                         break;
                     }
@@ -229,6 +232,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         tokio::task::block_in_place(|| {
             get_runtime().block_on(async {
                 pool.close().await;
+
                 if let Err(e) = tx.send(()) {
                     log::error!("Error closing pool: {e:?}");
                 }
@@ -262,6 +266,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                 if let Err(e) = DatabaseQueries::truncate(&pool).await {
                     log::error!("Error flushing pool: {e:?}");
                 }
+
                 if let Err(e) = tx.send(()) {
                     log::error!("Error sending flush result: {e:?}");
                 }
@@ -311,6 +316,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                         .into_iter()
                         .map(|(k, v)| (k, Bytes::from(v)))
                         .collect();
+
                     if let Err(e) = tx.send(mapping) {
                         log::error!("Failed to send general items: {e:?}");
                     }
@@ -338,6 +344,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                         .into_iter()
                         .map(|currency| (currency.code, currency))
                         .collect();
+
                     if let Err(e) = tx.send(mapping) {
                         log::error!("Failed to send currencies: {e:?}");
                     }
@@ -365,6 +372,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                         .into_iter()
                         .map(|instrument| (instrument.id(), instrument))
                         .collect();
+
                     if let Err(e) = tx.send(mapping) {
                         log::error!("Failed to send instruments: {e:?}");
                     }
@@ -396,6 +404,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                         .into_iter()
                         .map(|account| (account.id(), account))
                         .collect();
+
                     if let Err(e) = tx.send(mapping) {
                         log::error!("Failed to send accounts: {e:?}");
                     }
@@ -423,6 +432,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                         .into_iter()
                         .map(|order| (order.client_order_id(), order))
                         .collect();
+
                     if let Err(e) = tx.send(mapping) {
                         log::error!("Failed to send orders: {e:?}");
                     }
@@ -1031,6 +1041,10 @@ async fn drain_buffer(pool: &PgPool, buffer: &mut VecDeque<DatabaseQuery>) {
                     )
                     .await
                 }
+                InstrumentAny::TokenizedAsset(instrument) => {
+                    DatabaseQueries::add_instrument(pool, "TOKENIZED_ASSET", Box::new(instrument))
+                        .await
+                }
             },
             DatabaseQuery::AddOrder(order_any, client_id, updated) => match order_any {
                 OrderAny::Limit(order) => {
@@ -1119,11 +1133,14 @@ async fn drain_buffer(pool: &PgPool, buffer: &mut VecDeque<DatabaseQuery>) {
                 DatabaseQueries::add_position_snapshot(pool, snapshot).await
             }
             DatabaseQuery::AddAccount(account_any, updated) => match account_any {
+                AccountAny::Margin(account) => {
+                    DatabaseQueries::add_account(pool, "MARGIN", updated, Box::new(account)).await
+                }
                 AccountAny::Cash(account) => {
                     DatabaseQueries::add_account(pool, "CASH", updated, Box::new(account)).await
                 }
-                AccountAny::Margin(account) => {
-                    DatabaseQueries::add_account(pool, "MARGIN", updated, Box::new(account)).await
+                AccountAny::Betting(account) => {
+                    DatabaseQueries::add_account(pool, "BETTING", updated, Box::new(account)).await
                 }
             },
             DatabaseQuery::AddSignal(signal) => DatabaseQueries::add_signal(pool, &signal).await,

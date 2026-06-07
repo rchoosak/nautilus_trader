@@ -15,9 +15,11 @@
 
 from __future__ import annotations
 
+from nautilus_trader.adapters.hyperliquid.enums import HyperliquidProductType
 from nautilus_trader.common.config import PositiveInt
 from nautilus_trader.config import LiveDataClientConfig
 from nautilus_trader.config import LiveExecClientConfig
+from nautilus_trader.core.nautilus_pyo3 import HyperliquidEnvironment
 
 
 class HyperliquidDataClientConfig(LiveDataClientConfig, frozen=True):
@@ -26,25 +28,25 @@ class HyperliquidDataClientConfig(LiveDataClientConfig, frozen=True):
 
     Parameters
     ----------
+    product_types : tuple[HyperliquidProductType, ...], optional
+        The Hyperliquid product types to load for the client instrument provider.
+        If ``None`` then the instrument provider defaults are used.
+    environment : HyperliquidEnvironment, optional
+        The Hyperliquid environment for the client (MAINNET or TESTNET).
+        If ``None`` then defaults to MAINNET.
     base_url_ws : str, optional
         The WebSocket client custom endpoint override.
-    http_proxy_url : str, optional
-        Optional HTTP proxy URL.
-    ws_proxy_url : str, optional
-        Optional WebSocket proxy URL.
-        Note: WebSocket proxy support is not yet implemented. This field is reserved
-        for future functionality. Use `http_proxy_url` for REST API proxy support.
-    testnet : bool, default False
-        If the client is connecting to the Hyperliquid testnet API.
+    proxy_url : str, optional
+        Optional proxy URL for HTTP and WebSocket transports.
     http_timeout_secs : PositiveInt, default 10
         The timeout (seconds) for HTTP requests.
 
     """
 
+    product_types: tuple[HyperliquidProductType, ...] | None = None
+    environment: HyperliquidEnvironment | None = None
     base_url_ws: str | None = None
-    http_proxy_url: str | None = None
-    ws_proxy_url: str | None = None
-    testnet: bool = False
+    proxy_url: str | None = None
     http_timeout_secs: PositiveInt = 10
 
 
@@ -57,21 +59,27 @@ class HyperliquidExecClientConfig(LiveExecClientConfig, frozen=True):
     private_key : str, optional
         The Hyperliquid EVM private key.
         If ``None`` then will source the `HYPERLIQUID_PK` or `HYPERLIQUID_TESTNET_PK`
-        environment variable (depending on the `testnet` setting).
+        environment variable based on `environment`.
     vault_address : str, optional
         The vault address for vault trading.
         If ``None`` then will source the `HYPERLIQUID_VAULT` or `HYPERLIQUID_TESTNET_VAULT`
-        environment variable (depending on the `testnet` setting).
+        environment variable based on `environment`.
+    account_address : str, optional
+        The main account address when using an agent wallet (API sub-key).
+        When set, this address is used for balance queries, position reports,
+        and WebSocket subscriptions instead of the address derived from the private key.
+        Signing still uses the agent wallet's private key.
+        If ``None`` then will source the `HYPERLIQUID_ACCOUNT_ADDRESS` environment variable.
+    product_types : tuple[HyperliquidProductType, ...], optional
+        The Hyperliquid product types to load for the client instrument provider.
+        If ``None`` then the instrument provider defaults are used.
+    environment : HyperliquidEnvironment, optional
+        The Hyperliquid environment for the client (MAINNET or TESTNET).
+        If ``None`` then defaults to MAINNET.
     base_url_ws : str, optional
         The WebSocket client custom endpoint override.
-    http_proxy_url : str, optional
-        Optional HTTP proxy URL.
-    ws_proxy_url : str, optional
-        Optional WebSocket proxy URL.
-        Note: WebSocket proxy support is not yet implemented. This field is reserved
-        for future functionality. Use `http_proxy_url` for REST API proxy support.
-    testnet : bool, default False
-        If the client is connecting to the Hyperliquid testnet API.
+    proxy_url : str, optional
+        Optional proxy URL for HTTP and WebSocket transports.
     max_retries : PositiveInt, optional
         The maximum number of times a submit, cancel or modify order request will be retried.
     retry_delay_initial_ms : PositiveInt, optional
@@ -86,10 +94,6 @@ class HyperliquidExecClientConfig(LiveExecClientConfig, frozen=True):
         dynamic constraint that depends on the price magnitude and cannot be fully encoded
         in the static instrument tick size. When enabled, prices are automatically rounded
         to comply with this rule. Disable if you want full control over price formatting.
-    builder_fee_refresh_mins : PositiveInt or None, default 60
-        Interval in minutes for refreshing the builder fee tier from Hyperliquid.
-        The builder maker fee scales down with volume.
-        Set to ``None`` to disable.
 
     Warnings
     --------
@@ -99,13 +103,13 @@ class HyperliquidExecClientConfig(LiveExecClientConfig, frozen=True):
 
     private_key: str | None = None
     vault_address: str | None = None
+    account_address: str | None = None
+    product_types: tuple[HyperliquidProductType, ...] | None = None
+    environment: HyperliquidEnvironment | None = None
     base_url_ws: str | None = None
-    http_proxy_url: str | None = None
-    ws_proxy_url: str | None = None
-    testnet: bool = False
+    proxy_url: str | None = None
     max_retries: PositiveInt | None = None
     retry_delay_initial_ms: PositiveInt | None = None
     retry_delay_max_ms: PositiveInt | None = None
     http_timeout_secs: PositiveInt = 10
     normalize_prices: bool = True
-    builder_fee_refresh_mins: PositiveInt | None = 60

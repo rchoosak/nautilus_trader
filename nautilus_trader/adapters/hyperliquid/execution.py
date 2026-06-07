@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 from decimal import ROUND_CEILING
 from decimal import ROUND_FLOOR
@@ -24,11 +23,11 @@ from decimal import Decimal
 from typing import Any
 
 from nautilus_trader.adapters.hyperliquid.config import HyperliquidExecClientConfig
-from nautilus_trader.adapters.hyperliquid.constants import HYPERLIQUID_BUILDER_FEE_NOT_APPROVED
 from nautilus_trader.adapters.hyperliquid.constants import HYPERLIQUID_POST_ONLY_WOULD_MATCH
 from nautilus_trader.adapters.hyperliquid.constants import HYPERLIQUID_VENUE
 from nautilus_trader.adapters.hyperliquid.providers import HyperliquidInstrumentProvider
 from nautilus_trader.cache.cache import Cache
+from nautilus_trader.cache.transformers import transform_order_to_pyo3
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
@@ -54,6 +53,7 @@ from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.enums import OrderType
+from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.enums import order_side_to_str
 from nautilus_trader.model.events import AccountState
 from nautilus_trader.model.events import OrderAccepted
@@ -70,6 +70,7 @@ from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import VenueOrderId
+from nautilus_trader.model.objects import Quantity
 
 
 class HyperliquidExecutionClient(LiveExecutionClient):
@@ -127,11 +128,11 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         self._instrument_provider: HyperliquidInstrumentProvider = instrument_provider
 
         # Log configuration details
-        self._log.info(f"config.testnet={config.testnet}", LogColor.BLUE)
+        environment = config.environment or nautilus_pyo3.HyperliquidEnvironment.MAINNET
+        self._log.info(f"config.environment={environment}", LogColor.BLUE)
         self._log.info(f"config.http_timeout_secs={config.http_timeout_secs}", LogColor.BLUE)
         self._log.info(f"config.normalize_prices={config.normalize_prices}", LogColor.BLUE)
-        self._log.info(f"{config.http_proxy_url=}", LogColor.BLUE)
-        self._log.info(f"{config.ws_proxy_url=}", LogColor.BLUE)
+        self._log.info(f"{config.proxy_url=}", LogColor.BLUE)
 
         account_id = AccountId(f"{name or HYPERLIQUID_VENUE.value}-master")
         self._set_account_id(account_id)
@@ -139,8 +140,9 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         # WebSocket client for order/execution updates (user-level, not product-specific)
         self._ws_client = nautilus_pyo3.HyperliquidWebSocketClient(
             url=config.base_url_ws,
-            testnet=config.testnet,
+            environment=environment,
             account_id=str(account_id),
+            proxy_url=config.proxy_url,
         )
 
         # Caches to handle race conditions and duplicate messages
@@ -148,18 +150,41 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         self._accepted_orders: nautilus_pyo3.FifoCache = nautilus_pyo3.FifoCache()
         self._terminal_orders: nautilus_pyo3.FifoCache = nautilus_pyo3.FifoCache()
         self._pending_filled: set[str] = set()
+        # client_order_id.value to old venue_order_id.value for in-flight
+        # Hyperliquid modifies, populated before the modify HTTP call and
+        # cleared on either the replacement ACCEPTED(new_voi) or any modify
+        # failure. The WS handler uses it to suppress the old leg of a
+        # cancel-replace when CANCELED(old_voi) arrives before the replacement
+        # ACCEPTED(new_voi). See GH-3827.
+        self._pending_modify_keys: dict[str, str] = {}
+        # User-intended absolute total qty per in-flight modify; used by
+        # the cancel-replace promotion instead of the venue's remaining-only
+        # `report.quantity`.
+        self._pending_modify_target_qty: dict[str, Quantity] = {}
+        # FillReports buffered during an in-flight cancel-replace, drained
+        # from the cancel-replace ACCEPTED branch. See GH-3972.
+        self._buffered_fills: dict[str, list[nautilus_pyo3.FillReport]] = {}
+
+        # FillReports buffered when fill arrives before order is in cache,
+        # drained on OrderAccepted.
+        self._pending_fills: dict[str, list[nautilus_pyo3.FillReport]] = {}
 
         self._fee_refresh_task: asyncio.Task | None = None
 
-        # Get user address from HTTP client for WebSocket subscriptions
-        # Use vault address when vault trading, otherwise order/fill
-        # updates for the vault will be missed
+        # Get user address from HTTP client for WebSocket subscriptions.
+        # Resolution order: account_address (agent wallet) → vault_address → EOA
         self._user_address: str | None = None
         try:
             eoa_address = self._client.get_user_address()
-            self._user_address = config.vault_address or eoa_address
+            self._user_address = config.account_address or config.vault_address or eoa_address
             self._log.info(f"User address (EOA): {eoa_address}", LogColor.BLUE)
-            if config.vault_address:
+
+            if config.account_address:
+                self._log.info(
+                    f"Account address (agent wallet, WS subscriptions): {config.account_address}",
+                    LogColor.BLUE,
+                )
+            elif config.vault_address:
                 self._log.info(
                     f"Vault address (WS subscriptions): {config.vault_address}",
                     LogColor.BLUE,
@@ -170,6 +195,19 @@ class HyperliquidExecutionClient(LiveExecutionClient):
     @property
     def hyperliquid_instrument_provider(self) -> HyperliquidInstrumentProvider:
         return self._instrument_provider
+
+    async def _split_outcome(self, outcome: int, amount: Decimal) -> str:
+        return await self._client.submit_split_outcome(outcome, amount)
+
+    async def _merge_outcome(self, outcome: int, amount: Decimal | None = None) -> str:
+        # `amount=None` serializes as JSON `null`, which the venue treats as the max mergeable balance
+        return await self._client.submit_merge_outcome(outcome, amount)
+
+    async def _merge_question(self, question: int, amount: Decimal | None = None) -> str:
+        return await self._client.submit_merge_question(question, amount)
+
+    async def _negate_outcome(self, question: int, outcome: int, amount: Decimal) -> str:
+        return await self._client.submit_negate_outcome(question, outcome, amount)
 
     def _cache_instruments(self) -> None:
         # Ensures instrument definitions are available for correct
@@ -198,14 +236,11 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         await self._update_account_state()
         await self._await_account_registered()
 
-        # Fetch initial builder fee tier from HL
-        await self._fetch_and_update_builder_fee(log_always=True)
-
         self._sync_cloid_cache()
 
         instruments = self._instrument_provider.instruments_pyo3()
 
-        await self._ws_client.connect(instruments, self._handle_msg)
+        await self._ws_client.connect(self._loop, instruments, self._handle_msg)
         self._log.info(f"Connected to WebSocket {self._ws_client.url}", LogColor.BLUE)
 
         if self._user_address:
@@ -221,27 +256,13 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                 LogColor.BLUE,
             )
 
-        # Start periodic builder fee refresh after successful connect
-        if self._fee_refresh_task is not None:
-            self._fee_refresh_task.cancel()
-            self._fee_refresh_task = None
-
-        refresh_mins = self._config.builder_fee_refresh_mins
-        if refresh_mins is not None:
-            self._fee_refresh_task = self.create_task(
-                self._builder_fee_refresh_loop(refresh_mins * 60),
-            )
-            self._log.info(
-                f"Builder fee refresh scheduled every {refresh_mins}m",
-                LogColor.BLUE,
-            )
-
     def _sync_cloid_cache(self) -> None:
         orders = self._cache.orders(venue=self.venue)
         if not orders:
             return
 
         count = 0
+
         for order in orders:
             if order.is_closed:
                 continue
@@ -255,6 +276,9 @@ class HyperliquidExecutionClient(LiveExecutionClient):
             self._log.info(f"Cached cloid mappings for {count} existing order(s)", LogColor.BLUE)
 
     def _cleanup_cloid_mapping(self, client_order_id: ClientOrderId) -> None:
+        # Drop the cancel-replace fill buffer to avoid stranded entries (GH-3972).
+        self._buffered_fills.pop(client_order_id.value, None)
+        self._pending_fills.pop(client_order_id.value, None)
         try:
             pyo3_client_order_id = nautilus_pyo3.ClientOrderId(client_order_id.value)
             cloid = nautilus_pyo3.hyperliquid_cloid_from_client_order_id(pyo3_client_order_id)
@@ -278,79 +302,7 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                 f"Generated account state with {len(account_state.balances)} balance(s)",
             )
 
-    @staticmethod
-    def _fmt_bp(bp: Decimal) -> str:
-        return f"{bp:.1f} bp ({(bp / 100).normalize()}%)"
-
-    def _log_fee_summary(
-        self,
-        maker_rate: str,
-        taker_rate: str,
-        builder_maker_tenths_bp: int,
-        builder_taker_tenths_bp: int,
-    ) -> None:
-        maker_d = Decimal(maker_rate)
-        taker_d = Decimal(taker_rate)
-        hl_maker_bp = maker_d * 10_000
-        hl_taker_bp = taker_d * 10_000
-        builder_maker_bp = Decimal(builder_maker_tenths_bp) / 10
-        builder_taker_bp = Decimal(builder_taker_tenths_bp) / 10
-        self._log.info(
-            f"HL maker: {self._fmt_bp(hl_maker_bp)}, "
-            f"builder maker: {self._fmt_bp(builder_maker_bp)}, "
-            f"total maker: {self._fmt_bp(hl_maker_bp + builder_maker_bp)}",
-            LogColor.BLUE,
-        )
-        self._log.info(
-            f"HL taker: {self._fmt_bp(hl_taker_bp)}, "
-            f"builder taker: {self._fmt_bp(builder_taker_bp)}, "
-            f"total taker: {self._fmt_bp(hl_taker_bp + builder_taker_bp)}",
-            LogColor.BLUE,
-        )
-
-    async def _fetch_and_update_builder_fee(self, log_always: bool = False) -> None:
-        try:
-            json_str = await self._client.info_user_fees()
-            data = json.loads(json_str)
-            raw_add_rate = data.get("userAddRate")
-            if raw_add_rate is None:
-                raise ValueError("missing userAddRate in response")
-            raw_cross_rate = data.get("userCrossRate")
-            if raw_cross_rate is None:
-                raise ValueError("missing userCrossRate in response")
-
-            user_add_rate = float(raw_add_rate)
-            user_cross_rate = float(raw_cross_rate)
-            (maker_old, maker_new), (taker_old, taker_new) = self._client.update_builder_fees(
-                user_add_rate,
-                user_cross_rate,
-            )
-
-            if log_always or maker_old != maker_new or taker_old != taker_new:
-                self._log_fee_summary(raw_add_rate, raw_cross_rate, maker_new, taker_new)
-        except Exception as e:
-            maker_bp = Decimal(self._client.builder_maker_tenths_bp()) / 10
-            taker_bp = Decimal(self._client.builder_taker_tenths_bp()) / 10
-            self._log.warning(
-                f"Failed to query userFees, retaining builder fees: "
-                f"maker {self._fmt_bp(maker_bp)}, taker {self._fmt_bp(taker_bp)}: {e}",
-            )
-
-    async def _builder_fee_refresh_loop(self, interval_secs: int) -> None:
-        try:
-            while True:
-                await asyncio.sleep(interval_secs)
-                await self._fetch_and_update_builder_fee()
-        except asyncio.CancelledError:
-            self._log.debug("Canceled task 'builder_fee_refresh'")
-            return
-
     async def _disconnect(self) -> None:
-        if self._fee_refresh_task is not None:
-            self._log.debug("Canceling task 'builder_fee_refresh'")
-            self._fee_refresh_task.cancel()
-            self._fee_refresh_task = None
-
         # Delay to allow websocket to send any unsubscribe messages
         await asyncio.sleep(1.0)
 
@@ -370,41 +322,37 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         command: GenerateOrderStatusReport,
     ) -> OrderStatusReport | None:
         try:
-            instrument_id = command.instrument_id.value if command.instrument_id else None
-            pyo3_reports = await self._client.request_order_status_reports(
-                instrument_id=instrument_id,
+            venue_order_id = command.venue_order_id.value if command.venue_order_id else None
+            client_order_id = command.client_order_id.value if command.client_order_id else None
+
+            if venue_order_id is None and client_order_id is None:
+                self._log.warning(
+                    "Cannot generate order status report without venue_order_id or client_order_id",
+                )
+                return None
+
+            pyo3_report = await self._client.request_order_status_report(
+                venue_order_id=venue_order_id,
+                client_order_id=client_order_id,
             )
 
-            for pyo3_report in pyo3_reports:
-                report = OrderStatusReport.from_pyo3(pyo3_report)
+            if pyo3_report is None:
+                self._log.warning(
+                    f"No order status report found for client_order_id={command.client_order_id}, "
+                    f"venue_order_id={command.venue_order_id}",
+                )
+                return None
 
-                report.client_order_id = self._resolve_cloid(report.client_order_id)
+            report = OrderStatusReport.from_pyo3(pyo3_report)
+            report.client_order_id = self._resolve_cloid(report.client_order_id)
 
-                if self._is_external_order(report.client_order_id) and report.venue_order_id:
-                    resolved_id = self._cache.client_order_id(report.venue_order_id)
-                    if resolved_id:
-                        report.client_order_id = resolved_id
+            if self._is_external_order(report.client_order_id) and report.venue_order_id:
+                resolved_id = self._cache.client_order_id(report.venue_order_id)
+                if resolved_id:
+                    report.client_order_id = resolved_id
 
-                if (
-                    command.client_order_id
-                    and report.client_order_id
-                    and report.client_order_id.value == command.client_order_id.value
-                ):
-                    self._log.debug(f"Found order status report: {report}")
-                    return report
-
-                if (
-                    command.venue_order_id
-                    and report.venue_order_id.value == command.venue_order_id.value
-                ):
-                    self._log.debug(f"Found order status report: {report}")
-                    return report
-
-            self._log.warning(
-                f"No order status report found for client_order_id={command.client_order_id}, "
-                f"venue_order_id={command.venue_order_id}",
-            )
-            return None
+            self._log.debug(f"Found order status report: {report}")
+            return report
         except (asyncio.CancelledError, Exception) as e:
             self._log_report_error(e, "OrderStatusReport")
             return None
@@ -420,6 +368,7 @@ class HyperliquidExecutionClient(LiveExecutionClient):
             )
 
             reports = []
+
             for pyo3_report in pyo3_reports:
                 report = OrderStatusReport.from_pyo3(pyo3_report)
 
@@ -452,6 +401,7 @@ class HyperliquidExecutionClient(LiveExecutionClient):
             pyo3_reports = await self._client.request_fill_reports(instrument_id=instrument_id)
 
             reports = []
+
             for pyo3_report in pyo3_reports:
                 report = FillReport.from_pyo3(pyo3_report)
 
@@ -619,6 +569,7 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         # TODO: Extract this to Rust
         # Round in the direction that preserves slippage buffer
         quantizer = Decimal(10) ** -instrument.price_precision
+
         if order.side == OrderSide.BUY:
             price = price.quantize(quantizer, rounding=ROUND_CEILING)
         else:
@@ -633,11 +584,48 @@ class HyperliquidExecutionClient(LiveExecutionClient):
 
         return nautilus_pyo3.Price.from_decimal(price)
 
+    def _derive_limit_from_trigger(self, order, trigger_price) -> Decimal:
+        slippage_pct = Decimal("0.005")
+        base_price = Decimal(str(trigger_price))
+
+        if order.side == OrderSide.BUY:
+            price = base_price * (Decimal(1) + slippage_pct)
+        else:
+            price = base_price * (Decimal(1) - slippage_pct)
+
+        price = self._round_to_significant_figures(price, sig_figs=5)
+
+        instrument = self._cache.instrument(order.instrument_id)
+        if instrument is not None:
+            quantizer = Decimal(10) ** -instrument.price_precision
+
+            if order.side == OrderSide.BUY:
+                price = price.quantize(quantizer, rounding=ROUND_CEILING)
+            else:
+                price = price.quantize(quantizer, rounding=ROUND_FLOOR)
+
+        return price.normalize()
+
+    def _check_time_in_force(self, order) -> bool:
+        if order.time_in_force not in (TimeInForce.GTC, TimeInForce.IOC):
+            self.generate_order_denied(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                reason=f"UNSUPPORTED_TIME_IN_FORCE: {TimeInForce(order.time_in_force).name} not supported by Hyperliquid",
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return False
+        return True
+
     async def _submit_order(self, command: SubmitOrder) -> None:
         order = command.order
 
         if order.is_closed:
             self._log.warning(f"Order {order} is already closed")
+            return
+
+        if not self._check_time_in_force(order):
             return
 
         self.generate_order_submitted(
@@ -697,22 +685,18 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                 reduce_only=order.is_reduce_only,
             )
         except Exception as e:
+            if _is_transport_error(e):
+                self._log.warning(
+                    f"Submit transport failure for {order.client_order_id} "
+                    f"({type(e).__name__}: {e}); awaiting WS reconciliation",
+                )
+                return
+
             error_str = str(e)
             due_post_only = HYPERLIQUID_POST_ONLY_WOULD_MATCH in error_str
 
-            if HYPERLIQUID_BUILDER_FEE_NOT_APPROVED in error_str:
-                self._log.warning(
-                    "Builder fee not approved. See: "
-                    "https://nautilustrader.io/docs/nightly/integrations/hyperliquid#builder-fee-approval",
-                )
-
             self._terminal_orders.add(order.client_order_id.value)
-
-            # Only clean up cloid on confirmed rejections, not transport
-            # failures where the exchange may have accepted the order
-            if not isinstance(e, (TimeoutError, OSError)):
-                self._cleanup_cloid_mapping(order.client_order_id)
-
+            self._cleanup_cloid_mapping(order.client_order_id)
             self.generate_order_rejected(
                 strategy_id=order.strategy_id,
                 instrument_id=order.instrument_id,
@@ -739,6 +723,10 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         if not orders:
             return
 
+        orders = [o for o in orders if self._check_time_in_force(o)]
+        if not orders:
+            return
+
         now_ns = self._clock.timestamp_ns()
 
         for order in orders:
@@ -755,19 +743,22 @@ class HyperliquidExecutionClient(LiveExecutionClient):
             self._ws_client.cache_cloid_mapping(cloid, pyo3_client_order_id)
 
         try:
-            await self._client.submit_orders(orders)
+            pyo3_orders = [transform_order_to_pyo3(order) for order in orders]
+            await self._client.submit_orders(pyo3_orders)
         except Exception as e:
+            if _is_transport_error(e):
+                self._log.warning(
+                    f"Submit order list transport failure "
+                    f"({type(e).__name__}: {e}); awaiting WS reconciliation",
+                )
+                return
+
             error_str = str(e)
             due_post_only = HYPERLIQUID_POST_ONLY_WOULD_MATCH in error_str
 
-            is_transport_error = isinstance(e, (TimeoutError, OSError))
-
             for order in orders:
                 self._terminal_orders.add(order.client_order_id.value)
-
-                if not is_transport_error:
-                    self._cleanup_cloid_mapping(order.client_order_id)
-
+                self._cleanup_cloid_mapping(order.client_order_id)
                 self.generate_order_rejected(
                     strategy_id=order.strategy_id,
                     instrument_id=order.instrument_id,
@@ -777,11 +768,132 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                     due_post_only=due_post_only,
                 )
 
-    async def _modify_order(self, command: ModifyOrder) -> None:
-        # The modify functionality exists in Rust but requires exposing post_action() to Python
-        self._log.warning(
-            f"Order modification requires venue_order_id and is not yet exposed via Python bindings for {command.client_order_id}",
-        )
+    async def _modify_order(self, command: ModifyOrder) -> None:  # noqa: C901 (sequence of guard clauses)
+        order = self._cache.order(command.client_order_id)
+
+        if order is None:
+            self.generate_order_modify_rejected(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=command.venue_order_id,
+                reason="ORDER_NOT_FOUND_IN_CACHE",
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return
+
+        venue_order_id = None
+        if order.venue_order_id:
+            venue_order_id = order.venue_order_id
+        elif command.venue_order_id:
+            venue_order_id = command.venue_order_id
+
+        if venue_order_id is None:
+            self.generate_order_modify_rejected(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=venue_order_id,
+                reason="VENUE_ORDER_ID_REQUIRED",
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return
+
+        # Use command values if provided, else fall back to current order values
+        price = command.price if command.price else (order.price if order.has_price else None)
+        # Hyperliquid modify is cancel-replace; subtract filled to avoid overfill.
+        target_total_qty = command.quantity if command.quantity else order.quantity
+        if target_total_qty <= order.filled_qty:
+            self.generate_order_modify_rejected(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=venue_order_id,
+                reason=(
+                    f"MODIFY_QTY_NOT_GREATER_THAN_FILLED "
+                    f"(target={target_total_qty}, filled={order.filled_qty})"
+                ),
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return
+        quantity = target_total_qty - order.filled_qty
+        trigger_price = command.trigger_price
+        if not trigger_price and order.has_trigger_price:
+            trigger_price = order.trigger_price
+
+        # StopMarket/MarketIfTouched have no limit price — derive a
+        # slippage-adjusted limit from the trigger, matching submit path
+        if price is None and trigger_price is not None:
+            price = self._derive_limit_from_trigger(order, trigger_price)
+
+        if price is None:
+            self.generate_order_modify_rejected(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=venue_order_id,
+                reason="PRICE_REQUIRED_FOR_MODIFY",
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return
+
+        try:
+            pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(
+                command.instrument_id.value,
+            )
+            pyo3_venue_order_id = nautilus_pyo3.VenueOrderId(venue_order_id.value)
+            pyo3_order_side = order_side_to_pyo3(order.side)
+            pyo3_order_type = order_type_to_pyo3(order.order_type)
+            pyo3_price = nautilus_pyo3.Price.from_str(str(price))
+            pyo3_quantity = nautilus_pyo3.Quantity.from_str(str(quantity))
+            pyo3_time_in_force = time_in_force_to_pyo3(order.time_in_force)
+            pyo3_client_order_id = nautilus_pyo3.ClientOrderId(
+                command.client_order_id.value,
+            )
+
+            pyo3_trigger_price = None
+
+            if trigger_price is not None:
+                pyo3_trigger_price = nautilus_pyo3.Price.from_str(str(trigger_price))
+
+            # Mark in-flight BEFORE the await so the WS cancel handler sees it regardless of timing.
+            # Cleared on non-transport HTTP errors; preserved on transport errors so WS can reconcile.
+            self._pending_modify_keys[command.client_order_id.value] = venue_order_id.value
+            self._pending_modify_target_qty[command.client_order_id.value] = target_total_qty
+            self._log.info(f"Order modification requested for {command.client_order_id}")
+
+            await self._client.modify_order(
+                instrument_id=pyo3_instrument_id,
+                venue_order_id=pyo3_venue_order_id,
+                order_side=pyo3_order_side,
+                order_type=pyo3_order_type,
+                price=pyo3_price,
+                quantity=pyo3_quantity,
+                trigger_price=pyo3_trigger_price,
+                reduce_only=order.is_reduce_only,
+                post_only=order.is_post_only,
+                time_in_force=pyo3_time_in_force,
+                client_order_id=pyo3_client_order_id,
+            )
+
+        except Exception as e:
+            if _is_transport_error(e):
+                # Keep pending state so WS can reconcile target qty if the modify landed
+                self._log.warning(
+                    f"Modify transport failure for {command.client_order_id} "
+                    f"({type(e).__name__}: {e}); awaiting WS reconciliation",
+                )
+                return
+            self._pending_modify_keys.pop(command.client_order_id.value, None)
+            self._pending_modify_target_qty.pop(command.client_order_id.value, None)
+            self.generate_order_modify_rejected(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=venue_order_id,
+                reason=str(e),
+                ts_event=self._clock.timestamp_ns(),
+            )
 
     async def _cancel_order(self, command: CancelOrder) -> None:
         # Try to get venue_order_id from cache first, fall back to command
@@ -808,6 +920,12 @@ class HyperliquidExecutionClient(LiveExecutionClient):
             )
             self._log.info(f"Order cancellation requested for {command.client_order_id}")
         except Exception as e:
+            if _is_transport_error(e):
+                self._log.warning(
+                    f"Cancel transport failure for {command.client_order_id} "
+                    f"({type(e).__name__}: {e}); awaiting WS reconciliation",
+                )
+                return
             self.generate_order_cancel_rejected(
                 strategy_id=command.strategy_id,
                 instrument_id=command.instrument_id,
@@ -856,6 +974,12 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                     venue_order_id=pyo3_venue_order_id,
                 )
             except Exception as e:
+                if _is_transport_error(e):
+                    self._log.warning(
+                        f"Cancel transport failure for {order.client_order_id} "
+                        f"({type(e).__name__}: {e}); awaiting WS reconciliation",
+                    )
+                    continue
                 self.generate_order_cancel_rejected(
                     strategy_id=order.strategy_id,
                     instrument_id=order.instrument_id,
@@ -895,6 +1019,12 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                     venue_order_id=pyo3_venue_order_id,
                 )
             except Exception as e:
+                if _is_transport_error(e):
+                    self._log.warning(
+                        f"Cancel transport failure for {order.client_order_id} "
+                        f"({type(e).__name__}: {e}); awaiting WS reconciliation",
+                    )
+                    continue
                 self.generate_order_cancel_rejected(
                     strategy_id=order.strategy_id,
                     instrument_id=order.instrument_id,
@@ -955,12 +1085,45 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         self._accepted_orders.add(key)
         self._send_order_event(event)
 
+        # Drain any fills that arrived before order was in cache.
+        self._drain_fill_buffer(self._pending_fills, key)
+
     def _handle_order_canceled_pyo3(self, msg: nautilus_pyo3.OrderCanceled) -> None:
         event = OrderCanceled.from_dict(msg.to_dict())
         key = event.client_order_id.value
 
         if key in self._terminal_orders:
             self._log.debug(f"Ignoring duplicate OrderCanceled for {event.client_order_id!r}")
+            return
+
+        # Stale cancel suppression: if the cached venue_order_id has already advanced
+        # past the event's venue_order_id, the CANCELED refers to the old leg of a
+        # Hyperliquid cancel-replace modify already routed through OrderUpdated.
+        cached_voi = self._cache.venue_order_id(event.client_order_id)
+        if (
+            cached_voi is not None
+            and event.venue_order_id is not None
+            and event.venue_order_id != cached_voi
+        ):
+            self._log.debug(
+                f"Skipping stale OrderCanceled for {event.venue_order_id!r} "
+                f"(cached {cached_voi!r}) on {event.client_order_id!r}",
+            )
+            return
+
+        # Cancel-before-accept race: the pending marker is set before the modify HTTP
+        # call and removed on failure, so an in-flight modify suppresses its old leg
+        # CANCELED while a failed modify never falls here.
+        pending_old_voi = self._pending_modify_keys.get(key)
+        if (
+            pending_old_voi is not None
+            and event.venue_order_id is not None
+            and event.venue_order_id.value == pending_old_voi
+        ):
+            self._log.debug(
+                f"Suppressing cancel-before-accept for {event.client_order_id!r} "
+                f"venue_order_id={event.venue_order_id!r}",
+            )
             return
 
         self._terminal_orders.add(key)
@@ -1052,6 +1215,55 @@ class HyperliquidExecutionClient(LiveExecutionClient):
             )
         elif report.order_status == OrderStatus.ACCEPTED:
             key = report.client_order_id.value
+
+            # Cancel-replace detection: if the cached venue_order_id already
+            # differs from the report's venue_order_id, this ACCEPTED is the
+            # replacement leg of a Hyperliquid modify (cancel-replace), and must
+            # be emitted as OrderUpdated rather than a duplicate OrderAccepted.
+            # See GH-3827.
+            cached_voi = self._cache.venue_order_id(report.client_order_id)
+            if (
+                cached_voi is not None
+                and report.venue_order_id is not None
+                and report.venue_order_id != cached_voi
+            ):
+                update_price = report.price
+                if update_price is None and order.has_price:
+                    update_price = order.price
+                if update_price is None:
+                    self._log.warning(
+                        f"Cannot emit OrderUpdated for modify {report.client_order_id!r}: "
+                        "no price on report or cached order",
+                    )
+                    return
+
+                self._cache.add_venue_order_id(
+                    report.client_order_id,
+                    report.venue_order_id,
+                    overwrite=True,
+                )
+                self._pending_modify_keys.pop(key, None)
+                # Prefer user target over venue's remaining-only
+                # `report.quantity`; fall back when no marker (external modify).
+                target_qty = self._pending_modify_target_qty.pop(key, None)
+                update_quantity = target_qty if target_qty is not None else report.quantity
+
+                self.generate_order_updated(
+                    strategy_id=order.strategy_id,
+                    instrument_id=report.instrument_id,
+                    client_order_id=report.client_order_id,
+                    venue_order_id=report.venue_order_id,
+                    quantity=update_quantity,
+                    price=update_price,
+                    trigger_price=report.trigger_price,
+                    ts_event=report.ts_last,
+                    venue_order_id_modified=True,
+                )
+
+                # Drain buffered fills against the now-advanced state (GH-3972).
+                self._drain_fill_buffer(self._buffered_fills, key)
+                return
+
             if key in self._accepted_orders or key in self._terminal_orders:
                 return
             self._accepted_orders.add(key)
@@ -1063,6 +1275,10 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                 venue_order_id=report.venue_order_id,
                 ts_event=report.ts_last,
             )
+
+            # Drain any fills that arrived before order was in cache.
+            self._drain_fill_buffer(self._pending_fills, key)
+
         elif report.order_status == OrderStatus.PENDING_CANCEL:
             if order.status == OrderStatus.PENDING_CANCEL:
                 self._log.debug(
@@ -1076,6 +1292,41 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                 )
         elif report.order_status == OrderStatus.CANCELED:
             key = report.client_order_id.value
+
+            # Stale cancel suppression: if the cached venue_order_id has already
+            # been advanced past this report's venue_order_id, the CANCELED
+            # refers to the old leg of a Hyperliquid cancel-replace modify that
+            # has already been routed through OrderUpdated. See GH-3827.
+            cached_voi = self._cache.venue_order_id(report.client_order_id)
+            if (
+                cached_voi is not None
+                and report.venue_order_id is not None
+                and report.venue_order_id != cached_voi
+            ):
+                self._log.debug(
+                    f"Skipping stale CANCELED for {report.venue_order_id!r} "
+                    f"(cached {cached_voi!r}) on {report.client_order_id!r}",
+                )
+                return
+
+            # Cancel-before-accept race: for an in-flight modify, Hyperliquid
+            # may deliver CANCELED(old_voi) before the replacement ACCEPTED.
+            # Suppress the old leg so the later ACCEPTED can route through the
+            # OrderUpdated path. The marker is cleared on non-transport modify
+            # failure; on transport failure it stays so a landed modify can
+            # still reconcile.
+            pending_old_voi = self._pending_modify_keys.get(key)
+            if (
+                pending_old_voi is not None
+                and report.venue_order_id is not None
+                and report.venue_order_id.value == pending_old_voi
+            ):
+                self._log.debug(
+                    f"Skipping cancel-before-accept leg for "
+                    f"{report.client_order_id!r}, venue_order_id={report.venue_order_id!r}",
+                )
+                return
+
             if key in self._terminal_orders:
                 return
 
@@ -1177,23 +1428,40 @@ class HyperliquidExecutionClient(LiveExecutionClient):
 
         order = self._cache.order(client_order_id)
         if order is None:
-            # Don't mark as processed - order may arrive later
-            self._log.error(
-                f"Cannot process fill report - order for {client_order_id!r} not found",
+            self._log.warning(
+                f"Buffering fill report - order for {client_order_id!r} not yet in cache, "
+                f"will drain on OrderAccepted",
             )
+            self._pending_fills.setdefault(client_order_id.value, []).append(pyo3_report)
             return
 
         instrument = self._cache.instrument(order.instrument_id)
         if instrument is None:
-            self._processed_trade_ids.add(trade_id_str)
             self._log.error(
                 f"Cannot process fill report - instrument {order.instrument_id} not found",
             )
             return
 
-        self._processed_trade_ids.add(trade_id_str)
-
         key = order.client_order_id.value
+
+        # Buffer fills for an in-flight cancel-replace; the marker requirement
+        # avoids stranding stale old-leg fills after promotion. See GH-3972.
+        cached_voi = self._cache.venue_order_id(order.client_order_id)
+        if (
+            key in self._pending_modify_keys
+            and cached_voi is not None
+            and report.venue_order_id is not None
+            and report.venue_order_id != cached_voi
+        ):
+            self._log.debug(
+                f"Buffering cancel-replace fill for {order.client_order_id!r}: "
+                f"report_voi={report.venue_order_id!r}, cached_voi={cached_voi!r}, "
+                f"trade_id={report.trade_id!r}",
+            )
+            self._buffered_fills.setdefault(key, []).append(pyo3_report)
+            return
+
+        self._processed_trade_ids.add(trade_id_str)
 
         # If order not yet accepted, generate OrderAccepted first to avoid state transition error
         if key not in self._accepted_orders:
@@ -1206,6 +1474,9 @@ class HyperliquidExecutionClient(LiveExecutionClient):
                 venue_order_id=report.venue_order_id,
                 ts_event=report.ts_event,
             )
+
+            # Drain any fills that arrived before order was in cache.
+            self._drain_fill_buffer(self._pending_fills, key)
 
         self.generate_order_filled(
             strategy_id=order.strategy_id,
@@ -1229,6 +1500,16 @@ class HyperliquidExecutionClient(LiveExecutionClient):
         if key in self._pending_filled:
             self._pending_filled.discard(key)
             self._cleanup_cloid_mapping(order.client_order_id)
+
+    def _drain_fill_buffer(
+        self,
+        buffer: dict[str, list[nautilus_pyo3.FillReport]],
+        key: str,
+    ) -> None:
+        buffered = buffer.pop(key, None)
+        if buffered:
+            for pyo3_buffered in buffered:
+                self._handle_fill_report_pyo3(pyo3_buffered)
 
     def _handle_position_status_report_pyo3(
         self,
@@ -1255,3 +1536,14 @@ class HyperliquidExecutionClient(LiveExecutionClient):
             # Convert from PyO3 ClientOrderId to model ClientOrderId
             return ClientOrderId(resolved.value)
         return client_order_id
+
+
+# pyo3 HTTP errors arrive as ValueError carrying the Rust `Display` text
+_TRANSPORT_ERROR_PREFIXES = ("transport error:", "IO error:")
+
+
+def _is_transport_error(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, OSError)):
+        return True
+    msg = str(exc)
+    return msg == "timeout" or msg.startswith(_TRANSPORT_ERROR_PREFIXES)

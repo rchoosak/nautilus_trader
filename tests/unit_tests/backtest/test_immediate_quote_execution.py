@@ -56,11 +56,15 @@ class ImmediateOrderStrategy(Strategy):
         self.quote_count += 1
 
         if not self.order_submitted:
+            instrument = self.cache.instrument(self.instrument_id)
+            mid = (tick.bid_price.as_double() + tick.ask_price.as_double()) / 2.0
+            limit_price = instrument.next_ask_price(mid, num_ticks=0)
+
             order = self.order_factory.limit(
                 instrument_id=self.instrument_id,
                 order_side=OrderSide.BUY,
                 quantity=Quantity.from_int(100_000),
-                price=tick.ask_price,
+                price=limit_price,
             )
             self.submit_order(order)
             self.order_submitted = True
@@ -92,11 +96,15 @@ class DeltaHedgeOnFillStrategy(Strategy):
 
     def on_quote_tick(self, tick: QuoteTick):
         if not self.first_order_submitted:
+            instrument = self.cache.instrument(self.instrument_id)
+            mid = (tick.bid_price.as_double() + tick.ask_price.as_double()) / 2.0
+            limit_price = instrument.next_ask_price(mid, num_ticks=0)
+
             order = self.order_factory.limit(
                 instrument_id=self.instrument_id,
                 order_side=OrderSide.BUY,
                 quantity=Quantity.from_int(100_000),
-                price=tick.ask_price,
+                price=limit_price,
             )
             self.submit_order(order)
             self.first_order_submitted = True
@@ -130,6 +138,7 @@ class TestImmediateQuoteExecution:
     def _make_quotes(self, n=2):
         quotes = []
         base_ts = 1_000_000_000_000_000_000
+
         for i in range(n):
             bid_price = 0.70000 + (i * 0.00001)
             ask_price = bid_price + 0.00002
@@ -277,6 +286,7 @@ class TestBarSameTimestampExecution:
         bar_type = BarType.from_str(f"{self.instrument.id.value}-1-MINUTE-LAST-EXTERNAL")
         bars = []
         base_ts = 1_000_000_000_000_000_000
+
         for i in range(n):
             bar = Bar(
                 bar_type=bar_type,

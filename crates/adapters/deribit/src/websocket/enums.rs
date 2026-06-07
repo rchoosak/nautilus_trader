@@ -50,6 +50,10 @@ use strum::{AsRefStr, Display, EnumIter, EnumString};
         rename_all = "SCREAMING_SNAKE_CASE",
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.deribit")
+)]
 pub enum DeribitUpdateInterval {
     /// Raw updates - immediate delivery of each event.
     /// Requires authentication.
@@ -113,6 +117,10 @@ impl Display for DeribitUpdateInterval {
         module = "nautilus_trader.core.nautilus_pyo3.deribit",
         from_py_object
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.deribit")
 )]
 pub enum DeribitWsChannel {
     // Public Market Data Channels
@@ -213,7 +221,7 @@ impl DeribitWsChannel {
         }
     }
 
-    /// Formats the instrument state channel for subscription.
+    /// Formats the instrument status channel for subscription.
     ///
     /// Returns the full channel string: `instrument.state.{kind}.{currency}`
     ///

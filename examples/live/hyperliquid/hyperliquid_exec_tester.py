@@ -26,6 +26,7 @@ from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
+from nautilus_trader.core.nautilus_pyo3 import HyperliquidEnvironment
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
@@ -42,8 +43,12 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 # Mainnet: HYPERLIQUID_PK (and optionally HYPERLIQUID_VAULT)
 # Testnet: HYPERLIQUID_TESTNET_PK (and optionally HYPERLIQUID_TESTNET_VAULT)
 #
-# Before trading, approve builder fees (one-time per wallet per network):
-#   python nautilus_trader/adapters/hyperliquid/scripts/builder_fee_approve.py
+# Agent / API wallets: if your private key is an agent wallet approved under a
+# master account (typical when you create an API wallet on the Hyperliquid UI),
+# also set HYPERLIQUID_ACCOUNT_ADDRESS to the master account address. Otherwise
+# balance, order, and WebSocket queries hit the agent's address (which holds
+# nothing) and orders never reconcile. The same env var applies to mainnet and
+# testnet. See docs: integrations/hyperliquid.md#agent-wallets
 
 
 class HyperliquidProductType(Enum):
@@ -106,16 +111,18 @@ config_node = TradingNodeConfig(
     # ),
     data_clients={
         HYPERLIQUID: HyperliquidDataClientConfig(
+            environment=HyperliquidEnvironment.TESTNET
+            if testnet
+            else HyperliquidEnvironment.MAINNET,
             instrument_provider=InstrumentProviderConfig(load_all=True),
-            testnet=testnet,
         ),
     },
     exec_clients={
         HYPERLIQUID: HyperliquidExecClientConfig(
-            private_key=None,  # Loaded from env var based on testnet setting
-            vault_address=None,  # Optional, loaded from env var
+            environment=HyperliquidEnvironment.TESTNET
+            if testnet
+            else HyperliquidEnvironment.MAINNET,
             instrument_provider=InstrumentProviderConfig(load_all=True),
-            testnet=testnet,
             normalize_prices=True,  # Rounds prices to 5 significant figures (required for HL)
         ),
     },
@@ -147,6 +154,8 @@ strat_config = ExecTesterConfig(
     # enable_stop_sells=True,
     # tob_offset_ticks=0,  # Ticks away from top of book (0 = at market)
     use_post_only=True,  # Use post-only orders to get maker fees
+    # modify_orders_to_maintain_tob_offset=True,
+    # use_individual_cancels_on_stop=True,
     reduce_only_on_stop=reduce_only_on_stop,
     # cancel_orders_on_stop=False,
     # close_positions_on_stop=False,

@@ -47,7 +47,7 @@ Batches multiple contract calls into a single RPC request using Multicall3 (`0xc
 
 ### ERC20
 
-Inherits from `BaseContract` to leverage Multicall3 for efficient batch operations. Fetches token metadata with robust handling for non-standard implementations.
+Inherits from `BaseContract` to use Multicall3 for efficient batch operations. Fetches token metadata, handling non-standard implementations.
 
 **Methods:**
 
@@ -57,9 +57,9 @@ Inherits from `BaseContract` to leverage Multicall3 for efficient batch operatio
 
 **Error Types:**
 
-1. **`CallFailed`** - Contract missing or function not implemented → Skip token
-2. **`DecodingError`** - Raw bytes instead of ABI encoding (e.g., `0x5269636f...`) → Skip token
-3. **`EmptyTokenField`** - Function returns empty string → Skip if enforced
+1. **`CallFailed`** - Contract missing or function not implemented -> Skip token
+2. **`DecodingError`** - Raw bytes instead of ABI encoding (e.g., `0x5269636f...`) -> Skip token
+3. **`EmptyTokenField`** - Function returns empty string -> Skip if enforced
 
 **Best Practices:**
 
@@ -77,12 +77,11 @@ Inherits from `BaseContract` to leverage Multicall3 for efficient batch operatio
 | `wss_rpc_url`                   | `None`  | Optional WSS endpoint for streaming live updates. |
 | `rpc_requests_per_second`       | `None`  | Optional throttle for outbound RPC calls (requests per second). |
 | `multicall_calls_per_rpc_request` | `200` | Maximum number of Multicall targets batched per RPC request. |
-| `use_hypersync_for_live_data`   | `True`  | When `True`, bootstrap and stream using Hypersync for lower-latency diffs. |
+| `use_hypersync_for_live_data`   | `True`  | When `True`, bootstrap and stream using Hypersync for lower‑latency diffs. |
 | `from_block`                    | `None`  | Optional starting block height for historical backfill. |
 | `pool_filters`                  | `DexPoolFilters()` | Filtering rules applied when selecting DEX pools to monitor. |
-| `postgres_cache_database_config`| `None`  | Optional `PostgresConnectOptions` enabling on-disk caching of decoded pool state. |
-| `http_proxy_url`                | `None`  | Reserved for future use; not yet configurable via the constructor. |
-| `ws_proxy_url`                  | `None`  | Reserved for future use; not yet configurable via the constructor. |
+| `postgres_cache_database_config`| `None`  | Optional `PostgresConnectOptions` enabling on‑disk caching of decoded pool state. |
+| `proxy_url`                     | `None`  | Optional proxy URL for HTTP and WebSocket transports. |
 
 ## Contributing
 

@@ -1,13 +1,12 @@
 # Visualization
 
 NautilusTrader provides interactive HTML tearsheets for analyzing backtest results through
-an extensible visualization system built on Plotly. The system emphasizes configurability
-and extensibility, allowing you to generate comprehensive performance reports with minimal
-code while maintaining the flexibility to add custom charts and themes.
+an extensible visualization system built on Plotly. You can generate reports with minimal
+code and add custom charts and themes.
 
 ## Overview
 
-The visualization system is built on three core pillars:
+The visualization system has three parts:
 
 1. **Chart Registry** - Decoupled chart definitions that can be extended with custom visualizations.
 2. **Theme System** - Consistent styling with built-in and custom themes.
@@ -33,7 +32,7 @@ uv pip install "plotly>=6.3.1"
 
 ## Tearsheets
 
-A tearsheet is a comprehensive performance report that combines multiple charts and
+A tearsheet is a performance report that combines multiple charts and
 statistics into a single interactive visualization. Tearsheets are generated after
 completing a backtest run and provide immediate visual feedback on strategy performance.
 
@@ -113,7 +112,7 @@ The tearsheet can include any combination of the following built-in charts:
 | `stats_table`      | Table        | Performance statistics (PnL, returns, general metrics).  |
 | `equity`           | Line         | Cumulative returns over time with optional benchmark.    |
 | `drawdown`         | Area         | Drawdown percentage from peak equity.                    |
-| `monthly_returns`  | Heatmap      | Monthly return percentages organized by year.            |
+| `monthly_returns`  | Heatmap      | Monthly portfolio return percentages organized by year.  |
 | `distribution`     | Histogram    | Distribution of individual return values.                |
 | `rolling_sharpe`   | Line         | 60-day rolling Sharpe ratio.                             |
 | `yearly_returns`   | Bar          | Annual return percentages.                               |
@@ -124,7 +123,7 @@ All charts are registered in the chart registry and are configured via chart obj
 
 ### Run information table
 
-The `run_info` chart displays critical metadata about the backtest run:
+The `run_info` chart displays key metadata about the backtest run:
 
 - Run ID, start time, finish time
 - Backtest period (start/end dates)
@@ -136,7 +135,7 @@ This table appears in the top-left position by default.
 
 ### Performance statistics table
 
-The `stats_table` chart displays comprehensive performance metrics organized into sections:
+The `stats_table` chart displays performance metrics organized into sections:
 
 - **PnL Statistics** (per currency): Total PnL, win rate, profit factor, etc.
 - **Returns Statistics**: Sharpe ratio, Sortino ratio, max drawdown, etc.
@@ -174,7 +173,7 @@ NautilusTrader provides four built-in themes:
 | Theme Name      | Description                                    | Use Case                      |
 |-----------------|------------------------------------------------|-------------------------------|
 | `plotly_white`  | Clean light theme with dark gray headers.      | Default, professional reports.|
-| `plotly_dark`   | Dark background with standard Plotly colors.   | Low-light environments.       |
+| `plotly_dark`   | Dark background with standard Plotly colors.   | Low‑light environments.       |
 | `nautilus`      | Light theme with NautilusTrader brand colors.  | Official light mode.          |
 | `nautilus_dark` | Dark theme with teal/cyan signature colors.    | Official dark mode.           |
 
@@ -256,10 +255,10 @@ config = TearsheetConfig(
 
 | Parameter           | Type                          | Default                           | Description                                   |
 |---------------------|-------------------------------|-----------------------------------|-----------------------------------------------|
-| `charts`            | `list[TearsheetChart]`        | All built-in charts               | List of chart objects to include (in order).  |
+| `charts`            | `list[TearsheetChart]`        | All built‑in charts               | List of chart objects to include (in order).  |
 | `theme`             | `str`                         | `"plotly_white"`                  | Theme name for styling.                       |
-| `layout`            | `GridLayout`                  | `None` (auto-calculated)          | Custom subplot grid layout.                   |
-| `title`             | `str`                         | Auto-generated with strategy/time | Tearsheet title.                              |
+| `layout`            | `GridLayout`                  | `None` (auto‑calculated)          | Custom subplot grid layout.                   |
+| `title`             | `str`                         | Auto‑generated with strategy/time | Tearsheet title.                              |
 | `include_benchmark` | `bool`                        | `True`                            | Show benchmark when provided.                 |
 | `benchmark_name`    | `str`                         | `"Benchmark"`                     | Display name for benchmark.                   |
 | `height`            | `int`                         | `1500`                            | Total height in pixels.                       |
@@ -271,7 +270,7 @@ heights `[0.50, 0.22, 0.16, 0.12]` to give more space to the top row tables.
 
 ## Custom charts
 
-The registry pattern makes adding custom charts straightforward. Charts are functions that
+The registry pattern lets you add custom charts. Charts are functions that
 render traces onto a Plotly figure object.
 
 ### Registering a custom chart

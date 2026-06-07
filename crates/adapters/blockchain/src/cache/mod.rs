@@ -334,6 +334,7 @@ impl BlockchainCache {
                 block_timestamps.len(),
                 block_timestamps.last().unwrap().number,
             );
+
             for block in block_timestamps {
                 self.block_timestamps.insert(block.number, block.timestamp);
             }
@@ -652,6 +653,7 @@ impl BlockchainCache {
                 .iter()
                 .map(|pos| (*pool_identifier, pos.clone()))
                 .collect();
+
             if !positions.is_empty() {
                 database
                     .add_pool_positions_batch(
@@ -669,6 +671,7 @@ impl BlockchainCache {
                 .iter()
                 .map(|tick| (*pool_identifier, tick))
                 .collect();
+
             if !ticks.is_empty() {
                 database
                     .add_pool_ticks_batch(

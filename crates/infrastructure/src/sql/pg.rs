@@ -15,12 +15,14 @@
 
 use derive_builder::Builder;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use sqlx::{ConnectOptions, PgPool, postgres::PgConnectOptions};
 
 fn validate_sql_identifier(value: &str, label: &str) -> anyhow::Result<()> {
     if value.is_empty() {
         anyhow::bail!("{label} must not be empty");
     }
+
     if !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         anyhow::bail!(
             "{label} contains invalid characters (only alphanumeric and underscore allowed): {value}"
@@ -33,7 +35,8 @@ fn escape_sql_string(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[serde(deny_unknown_fields)]
 #[builder(default)]
 #[cfg_attr(
     feature = "python",
@@ -255,6 +258,7 @@ pub async fn init_postgres(
     let sql_files = vec!["types.sql", "functions.sql", "partitions.sql", "tables.sql"];
     let plpgsql_regex =
         Regex::new(r"\$\$ LANGUAGE plpgsql(?:[ \t\r\n]+SECURITY[ \t\r\n]+DEFINER)?;")?;
+
     for file_name in &sql_files {
         log::info!("Executing schema file: {file_name:?}");
         let file_path = format!("{schema_dir}/{file_name}");
@@ -418,4 +422,30 @@ pub async fn drop_postgres(pg: &PgPool, database: String) -> anyhow::Result<()> 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn test_postgres_connect_options_toml_round_trip() {
+        let config: PostgresConnectOptions = toml::from_str(
+            r#"
+host = "localhost"
+port = 5432
+username = "nautilus"
+password = "secret"
+database = "nautilus"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.host, "localhost");
+        assert_eq!(config.port, 5432);
+        assert_eq!(config.username, "nautilus");
+        assert_eq!(config.database, "nautilus");
+    }
 }

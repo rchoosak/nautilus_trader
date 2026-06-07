@@ -15,10 +15,9 @@
 
 use std::fmt::Display;
 
-use nautilus_core::{
-    UnixNanos,
-    correctness::{FAILED, check_in_range_inclusive_f64},
-};
+#[cfg(all(feature = "simulation", madsim))]
+use madsim::rand::RngCore;
+use nautilus_core::{UnixNanos, correctness::check_in_range_inclusive_f64};
 use nautilus_model::{
     data::order::BookOrder,
     enums::{BookType, OrderSide},
@@ -26,9 +25,20 @@ use nautilus_model::{
     instruments::{Instrument, InstrumentAny},
     orderbook::OrderBook,
     orders::{Order, OrderAny},
-    types::{Price, Quantity},
+    types::{Price, Quantity, fixed::FIXED_SCALAR, quantity::QuantityRaw},
 };
 use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+// Sentinel size used as "unlimited" liquidity in the synthetic fill book.
+// 10 billion units is well beyond any realistic order size, and pre-scaling
+// to `FIXED_SCALAR` once lets each book construction call `Quantity::from_raw`
+// instead of paying the `f64 * FIXED_SCALAR` round-trip in `Quantity::new`.
+const UNLIMITED_LIQUIDITY: f64 = 10_000_000_000.0;
+const UNLIMITED_LIQUIDITY_RAW: QuantityRaw = (UNLIMITED_LIQUIDITY * FIXED_SCALAR) as QuantityRaw;
+
+fn unlimited_liquidity(precision: u8) -> Quantity {
+    Quantity::from_raw(UNLIMITED_LIQUIDITY_RAW, precision)
+}
 
 pub trait FillModel {
     /// Returns `true` if a limit order should be filled based on the model.
@@ -36,6 +46,15 @@ pub trait FillModel {
 
     /// Returns `true` if an order fill should slip by one tick.
     fn is_slipped(&mut self) -> bool;
+
+    /// Returns whether limit orders at or inside the spread are fillable.
+    ///
+    /// When true, the matching core treats a limit order as fillable if its
+    /// price is at or better than the current best quote on its own side
+    /// (BUY >= bid, SELL <= ask), not just when it crosses the spread.
+    fn fill_limit_inside_spread(&self) -> bool {
+        false
+    }
 
     /// Returns a simulated `OrderBook` for fill simulation.
     ///
@@ -67,21 +86,16 @@ impl ProbabilisticFillState {
     /// # Errors
     ///
     /// Returns an error if probability parameters are not in range [0, 1].
-    ///
-    /// # Panics
-    ///
-    /// Panics if the range check assertions fail.
     pub fn new(
         prob_fill_on_limit: f64,
         prob_slippage: f64,
         random_seed: Option<u64>,
     ) -> anyhow::Result<Self> {
-        check_in_range_inclusive_f64(prob_fill_on_limit, 0.0, 1.0, "prob_fill_on_limit")
-            .expect(FAILED);
-        check_in_range_inclusive_f64(prob_slippage, 0.0, 1.0, "prob_slippage").expect(FAILED);
+        check_in_range_inclusive_f64(prob_fill_on_limit, 0.0, 1.0, "prob_fill_on_limit")?;
+        check_in_range_inclusive_f64(prob_slippage, 0.0, 1.0, "prob_slippage")?;
         let rng = match random_seed {
             Some(seed) => StdRng::seed_from_u64(seed),
-            None => StdRng::from_rng(&mut rand::rng()),
+            None => default_std_rng(),
         };
         Ok(Self {
             prob_fill_on_limit,
@@ -123,7 +137,22 @@ impl Clone for ProbabilisticFillState {
     }
 }
 
-const UNLIMITED: u64 = 10_000_000_000;
+fn default_std_rng() -> StdRng {
+    #[cfg(all(feature = "simulation", madsim))]
+    {
+        // Deterministic RNG when running inside a madsim runtime; otherwise
+        // (e.g. plain `#[rstest]` tests under `cfg(madsim)`) fall back to the
+        // host RNG. Production paths under simulation always run inside a
+        // runtime, so they continue to consume seeded bytes.
+        if madsim::runtime::Handle::try_current().is_ok() {
+            let mut seed = [0u8; 32];
+            madsim::rand::thread_rng().fill_bytes(&mut seed);
+            return StdRng::from_seed(seed);
+        }
+    }
+
+    StdRng::from_rng(&mut rand::rng()) // dst-ok: outside madsim runtime
+}
 
 fn build_l2_book(instrument_id: InstrumentId) -> OrderBook {
     OrderBook::new(instrument_id, BookType::L2_MBP)
@@ -135,6 +164,18 @@ fn add_order(book: &mut OrderBook, side: OrderSide, price: Price, size: Quantity
 }
 
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct DefaultFillModel {
     state: ProbabilisticFillState,
 }
@@ -202,6 +243,18 @@ impl FillModel for DefaultFillModel {
 
 /// Fill model that executes all orders at the best available price with unlimited liquidity.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct BestPriceFillModel {
     state: ProbabilisticFillState,
 }
@@ -246,6 +299,10 @@ impl FillModel for BestPriceFillModel {
         self.state.is_slipped()
     }
 
+    fn fill_limit_inside_spread(&self) -> bool {
+        true
+    }
+
     fn get_orderbook_for_fill_simulation(
         &mut self,
         instrument: &InstrumentAny,
@@ -259,14 +316,14 @@ impl FillModel for BestPriceFillModel {
             &mut book,
             OrderSide::Buy,
             best_bid,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             1,
         );
         add_order(
             &mut book,
             OrderSide::Sell,
             best_ask,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             2,
         );
         Some(book)
@@ -275,6 +332,18 @@ impl FillModel for BestPriceFillModel {
 
 /// Fill model that forces exactly one tick of slippage for all orders.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct OneTickSlippageFillModel {
     state: ProbabilisticFillState,
 }
@@ -334,14 +403,14 @@ impl FillModel for OneTickSlippageFillModel {
             &mut book,
             OrderSide::Buy,
             best_bid - tick,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             1,
         );
         add_order(
             &mut book,
             OrderSide::Sell,
             best_ask + tick,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             2,
         );
         Some(book)
@@ -350,6 +419,18 @@ impl FillModel for OneTickSlippageFillModel {
 
 /// Fill model with 50/50 chance of best price fill or one tick slippage.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct ProbabilisticFillModel {
     state: ProbabilisticFillState,
 }
@@ -410,14 +491,14 @@ impl FillModel for ProbabilisticFillModel {
                 &mut book,
                 OrderSide::Buy,
                 best_bid,
-                Quantity::new(UNLIMITED as f64, size_prec),
+                unlimited_liquidity(size_prec),
                 1,
             );
             add_order(
                 &mut book,
                 OrderSide::Sell,
                 best_ask,
-                Quantity::new(UNLIMITED as f64, size_prec),
+                unlimited_liquidity(size_prec),
                 2,
             );
         } else {
@@ -425,14 +506,14 @@ impl FillModel for ProbabilisticFillModel {
                 &mut book,
                 OrderSide::Buy,
                 best_bid - tick,
-                Quantity::new(UNLIMITED as f64, size_prec),
+                unlimited_liquidity(size_prec),
                 1,
             );
             add_order(
                 &mut book,
                 OrderSide::Sell,
                 best_ask + tick,
-                Quantity::new(UNLIMITED as f64, size_prec),
+                unlimited_liquidity(size_prec),
                 2,
             );
         }
@@ -442,6 +523,18 @@ impl FillModel for ProbabilisticFillModel {
 
 /// Fill model with two tiers: first 10 contracts at best price, remainder one tick worse.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct TwoTierFillModel {
     state: ProbabilisticFillState,
 }
@@ -515,14 +608,14 @@ impl FillModel for TwoTierFillModel {
             &mut book,
             OrderSide::Buy,
             best_bid - tick,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             3,
         );
         add_order(
             &mut book,
             OrderSide::Sell,
             best_ask + tick,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             4,
         );
         Some(book)
@@ -531,6 +624,18 @@ impl FillModel for TwoTierFillModel {
 
 /// Fill model with three tiers: 50 at best, 30 at +1 tick, 20 at +2 ticks.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct ThreeTierFillModel {
     state: ProbabilisticFillState,
 }
@@ -635,6 +740,18 @@ impl FillModel for ThreeTierFillModel {
 
 /// Fill model that simulates partial fills: max 5 contracts at best, unlimited one tick worse.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct LimitOrderPartialFillModel {
     state: ProbabilisticFillState,
 }
@@ -708,14 +825,14 @@ impl FillModel for LimitOrderPartialFillModel {
             &mut book,
             OrderSide::Buy,
             best_bid - tick,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             3,
         );
         add_order(
             &mut book,
             OrderSide::Sell,
             best_ask + tick,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             4,
         );
         Some(book)
@@ -725,6 +842,18 @@ impl FillModel for LimitOrderPartialFillModel {
 /// Fill model that applies different execution based on order size.
 /// Small orders (<=10) get 50 contracts at best. Large orders get 10 at best, remainder at +1 tick.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct SizeAwareFillModel {
     state: ProbabilisticFillState,
 }
@@ -811,6 +940,18 @@ impl FillModel for SizeAwareFillModel {
 
 /// Fill model that reduces available liquidity by a factor to simulate market competition.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct CompetitionAwareFillModel {
     state: ProbabilisticFillState,
     liquidity_factor: f64,
@@ -896,6 +1037,18 @@ impl FillModel for CompetitionAwareFillModel {
 /// Fill model that adjusts liquidity based on recent trading volume.
 /// Uses 25% of recent volume at best price, unlimited one tick worse.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct VolumeSensitiveFillModel {
     state: ProbabilisticFillState,
     recent_volume: f64,
@@ -979,14 +1132,14 @@ impl FillModel for VolumeSensitiveFillModel {
             &mut book,
             OrderSide::Buy,
             best_bid - tick,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             3,
         );
         add_order(
             &mut book,
             OrderSide::Sell,
             best_ask + tick,
-            Quantity::new(UNLIMITED as f64, size_prec),
+            unlimited_liquidity(size_prec),
             4,
         );
         Some(book)
@@ -996,6 +1149,18 @@ impl FillModel for VolumeSensitiveFillModel {
 /// Fill model that simulates varying conditions based on market hours.
 /// During low liquidity: wider spreads (one tick worse). Normal hours: standard liquidity.
 #[derive(Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.execution",
+        unsendable,
+        from_py_object
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.execution")
+)]
 pub struct MarketHoursFillModel {
     state: ProbabilisticFillState,
     is_low_liquidity: bool,
@@ -1130,6 +1295,22 @@ impl FillModel for FillModelAny {
         }
     }
 
+    fn fill_limit_inside_spread(&self) -> bool {
+        match self {
+            Self::Default(m) => m.fill_limit_inside_spread(),
+            Self::BestPrice(m) => m.fill_limit_inside_spread(),
+            Self::OneTickSlippage(m) => m.fill_limit_inside_spread(),
+            Self::Probabilistic(m) => m.fill_limit_inside_spread(),
+            Self::TwoTier(m) => m.fill_limit_inside_spread(),
+            Self::ThreeTier(m) => m.fill_limit_inside_spread(),
+            Self::LimitOrderPartialFill(m) => m.fill_limit_inside_spread(),
+            Self::SizeAware(m) => m.fill_limit_inside_spread(),
+            Self::CompetitionAware(m) => m.fill_limit_inside_spread(),
+            Self::VolumeSensitive(m) => m.fill_limit_inside_spread(),
+            Self::MarketHours(m) => m.fill_limit_inside_spread(),
+        }
+    }
+
     fn is_slipped(&mut self) -> bool {
         match self {
             Self::Default(m) => m.is_slipped(),
@@ -1217,6 +1398,7 @@ impl Display for FillModelAny {
 
 #[cfg(test)]
 mod tests {
+    use nautilus_core::correctness::CorrectnessError;
     use nautilus_model::{
         enums::OrderType, instruments::stubs::audusd_sim, orders::builder::OrderTestBuilder,
     };
@@ -1231,19 +1413,43 @@ mod tests {
     }
 
     #[rstest]
-    #[should_panic(
-        expected = "Condition failed: invalid f64 for 'prob_fill_on_limit' not in range [0, 1], was 1.1"
-    )]
     fn test_fill_model_param_prob_fill_on_limit_error() {
-        let _ = DefaultFillModel::new(1.1, 0.1, None).unwrap();
+        let error = DefaultFillModel::new(1.1, 0.1, None).unwrap_err();
+
+        assert_eq!(
+            error.downcast_ref::<CorrectnessError>(),
+            Some(&CorrectnessError::OutOfRange {
+                param: "prob_fill_on_limit".to_string(),
+                min: "0".to_string(),
+                max: "1".to_string(),
+                value: "1.1".to_string(),
+                type_name: "f64",
+            })
+        );
+        assert_eq!(
+            error.to_string(),
+            "invalid f64 for 'prob_fill_on_limit' not in range [0, 1], was 1.1"
+        );
     }
 
     #[rstest]
-    #[should_panic(
-        expected = "Condition failed: invalid f64 for 'prob_slippage' not in range [0, 1], was 1.1"
-    )]
     fn test_fill_model_param_prob_slippage_error() {
-        let _ = DefaultFillModel::new(0.5, 1.1, None).unwrap();
+        let error = DefaultFillModel::new(0.5, 1.1, None).unwrap_err();
+
+        assert_eq!(
+            error.downcast_ref::<CorrectnessError>(),
+            Some(&CorrectnessError::OutOfRange {
+                param: "prob_slippage".to_string(),
+                min: "0".to_string(),
+                max: "1".to_string(),
+                value: "1.1".to_string(),
+                type_name: "f64",
+            })
+        );
+        assert_eq!(
+            error.to_string(),
+            "invalid f64 for 'prob_slippage' not in range [0, 1], was 1.1"
+        );
     }
 
     #[rstest]
@@ -1335,5 +1541,35 @@ mod tests {
         let mut model = FillModelAny::Default(DefaultFillModel::new(0.5, 0.1, Some(42)).unwrap());
         let result = model.is_limit_filled();
         assert!(!result);
+    }
+
+    #[rstest]
+    fn test_default_fill_model_fill_limit_inside_spread_is_false() {
+        let model = DefaultFillModel::default();
+        assert!(!model.fill_limit_inside_spread());
+    }
+
+    #[rstest]
+    fn test_best_price_fill_model_fill_limit_inside_spread_is_true() {
+        let model = BestPriceFillModel::default();
+        assert!(model.fill_limit_inside_spread());
+    }
+
+    #[rstest]
+    fn test_one_tick_slippage_fill_model_fill_limit_inside_spread_is_false() {
+        let model = OneTickSlippageFillModel::default();
+        assert!(!model.fill_limit_inside_spread());
+    }
+
+    #[rstest]
+    fn test_fill_model_any_fill_limit_inside_spread_dispatch() {
+        let default = FillModelAny::Default(DefaultFillModel::default());
+        assert!(!default.fill_limit_inside_spread());
+
+        let best_price = FillModelAny::BestPrice(BestPriceFillModel::default());
+        assert!(best_price.fill_limit_inside_spread());
+
+        let one_tick = FillModelAny::OneTickSlippage(OneTickSlippageFillModel::default());
+        assert!(!one_tick.fill_limit_inside_spread());
     }
 }

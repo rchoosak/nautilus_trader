@@ -15,11 +15,11 @@
 
 //! Enumerations that model Kraken string/int enums across HTTP and WebSocket payloads.
 
-use nautilus_model::enums::{OrderSide, OrderStatus, OrderType};
+use nautilus_model::enums::{MarketStatusAction, OrderSide, OrderStatus, OrderType};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumString, FromRepr};
 
-/// Kraken API environment (mainnet or demo).
+/// Kraken API environment (live or demo).
 #[derive(
     Clone,
     Copy,
@@ -47,11 +47,15 @@ use strum::{AsRefStr, Display, EnumString, FromRepr};
         rename_all = "SCREAMING_SNAKE_CASE",
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenEnvironment {
     #[default]
-    Mainnet,
+    Live,
     Demo,
 }
 
@@ -82,6 +86,10 @@ pub enum KrakenEnvironment {
         from_py_object,
         rename_all = "SCREAMING_SNAKE_CASE",
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
@@ -115,6 +123,10 @@ pub enum KrakenProductType {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenOrderType {
@@ -132,6 +144,12 @@ pub enum KrakenOrderType {
     #[serde(rename = "take-profit-limit")]
     #[strum(serialize = "take-profit-limit")]
     TakeProfitLimit,
+    #[serde(rename = "trailing-stop")]
+    #[strum(serialize = "trailing-stop")]
+    TrailingStop,
+    #[serde(rename = "trailing-stop-limit")]
+    #[strum(serialize = "trailing-stop-limit")]
+    TrailingStopLimit,
     #[serde(rename = "settle-position")]
     #[strum(serialize = "settle-position")]
     SettlePosition,
@@ -160,6 +178,10 @@ pub enum KrakenOrderType {
         eq_int,
         from_py_object
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
@@ -191,6 +213,10 @@ pub enum KrakenOrderSide {
         eq_int,
         from_py_object
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
 )]
 #[serde(rename_all = "UPPERCASE")]
 #[strum(ascii_case_insensitive, serialize_all = "UPPERCASE")]
@@ -230,6 +256,10 @@ pub enum KrakenTimeInForce {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenOrderStatus {
@@ -264,6 +294,10 @@ pub enum KrakenOrderStatus {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenPositionSide {
@@ -294,6 +328,10 @@ pub enum KrakenPositionSide {
         eq_int,
         from_py_object
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(ascii_case_insensitive, serialize_all = "snake_case")]
@@ -337,6 +375,10 @@ pub enum KrakenPairStatus {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenSystemStatus {
@@ -374,10 +416,17 @@ pub enum KrakenSystemStatus {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenAssetClass {
     Currency,
+    #[serde(rename = "tokenized_asset")]
+    #[strum(serialize = "tokenized_asset")]
+    TokenizedAsset,
 }
 
 /// Kraken futures order type.
@@ -404,10 +453,14 @@ pub enum KrakenAssetClass {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenFuturesOrderType {
-    #[serde(rename = "lmt")]
+    #[serde(rename = "lmt", alias = "limit")]
     #[strum(serialize = "lmt")]
     Limit,
     #[serde(rename = "ioc")]
@@ -416,7 +469,7 @@ pub enum KrakenFuturesOrderType {
     #[serde(rename = "post")]
     #[strum(serialize = "post")]
     Post,
-    #[serde(rename = "mkt")]
+    #[serde(rename = "mkt", alias = "market")]
     #[strum(serialize = "mkt")]
     Market,
     #[serde(rename = "stp")]
@@ -431,6 +484,9 @@ pub enum KrakenFuturesOrderType {
     #[serde(rename = "stop_loss")]
     #[strum(serialize = "stop_loss")]
     StopLoss,
+    /// Catch-all for venue-emitted `"unknown"`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Event types from Kraken Futures sendorder/editorder responses.
@@ -453,7 +509,9 @@ pub enum KrakenFuturesOrderType {
 pub enum KrakenFuturesOrderEventType {
     /// Order was placed.
     Place,
-    /// Order was executed (filled).
+    /// Legacy history endpoint fill event.
+    Fill,
+    /// Send-order execution event.
     Execution,
     /// Order was rejected.
     Reject,
@@ -461,6 +519,10 @@ pub enum KrakenFuturesOrderEventType {
     Cancel,
     /// Order was edited.
     Edit,
+    /// Order expired.
+    #[serde(alias = "EXPIRED")]
+    #[strum(serialize = "EXPIRED")]
+    Expire,
 }
 
 /// Kraken futures order status.
@@ -486,6 +548,10 @@ pub enum KrakenFuturesOrderEventType {
         eq_int,
         from_py_object
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
 )]
 #[serde(rename_all = "camelCase")]
 #[strum(ascii_case_insensitive, serialize_all = "camelCase")]
@@ -521,14 +587,32 @@ pub enum KrakenFuturesOrderStatus {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenTriggerSignal {
     #[serde(rename = "last", alias = "last_price")]
     Last,
     #[serde(rename = "mark", alias = "mark_price")]
     Mark,
-    #[serde(rename = "index", alias = "index_price")]
+    #[serde(
+        rename = "spot",
+        alias = "spot_price",
+        alias = "index",
+        alias = "index_price"
+    )]
+    #[strum(
+        serialize = "spot",
+        serialize = "spot_price",
+        serialize = "index",
+        serialize = "index_price"
+    )]
     Index,
+    /// Catch-all for venue-emitted `"unknown"`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Trigger reference price for Kraken spot conditional orders.
@@ -554,6 +638,10 @@ pub enum KrakenTriggerSignal {
         eq_int,
         from_py_object
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
@@ -588,6 +676,10 @@ pub enum KrakenSpotTrigger {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenFillType {
@@ -619,6 +711,10 @@ pub enum KrakenFillType {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive, serialize_all = "lowercase")]
 pub enum KrakenApiResult {
@@ -649,6 +745,10 @@ pub enum KrakenApiResult {
         eq_int,
         from_py_object
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(ascii_case_insensitive, serialize_all = "snake_case")]
@@ -683,6 +783,10 @@ pub enum KrakenInstrumentType {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "camelCase")]
 #[strum(ascii_case_insensitive, serialize_all = "camelCase")]
 pub enum KrakenSendStatus {
@@ -694,6 +798,14 @@ pub enum KrakenSendStatus {
     Edited,
     /// Order not found.
     NotFound,
+    /// No orders matched the cancel-all request.
+    ///
+    /// Returned by the Kraken Futures `cancelallorders` endpoint as the
+    /// `cancelStatus.status` field. The accompanying `cancelledOrders` array
+    /// may still be populated for orders that were canceled in the same call,
+    /// so callers must inspect that array rather than treating this status
+    /// as an error.
+    NoOrdersToCancel,
     /// Insufficient available funds.
     InsufficientAvailableFunds,
     /// Invalid order type.
@@ -732,6 +844,10 @@ pub enum KrakenSendStatus {
         from_py_object
     )
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.kraken")
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(ascii_case_insensitive, serialize_all = "snake_case")]
 pub enum KrakenTriggerSide {
@@ -743,6 +859,9 @@ pub enum KrakenTriggerSide {
     #[serde(rename = "trigger_below")]
     #[strum(serialize = "trigger_below")]
     TriggerBelow,
+    /// Catch-all for venue-emitted `"unknown"`; treated as no directional intent.
+    #[serde(other)]
+    Unknown,
 }
 
 impl From<KrakenOrderSide> for OrderSide {
@@ -755,6 +874,11 @@ impl From<KrakenOrderSide> for OrderSide {
 }
 
 impl From<KrakenOrderType> for OrderType {
+    /// Maps Kraken order types to Nautilus order types for reconciliation.
+    ///
+    /// Trailing stops map to their non-trailing equivalents because
+    /// Kraken reports lack the offset fields required to reconstruct
+    /// a trailing order during reconciliation.
     fn from(value: KrakenOrderType) -> Self {
         match value {
             KrakenOrderType::Market => Self::Market,
@@ -763,6 +887,8 @@ impl From<KrakenOrderType> for OrderType {
             KrakenOrderType::TakeProfit => Self::MarketIfTouched,
             KrakenOrderType::StopLossLimit => Self::StopLimit,
             KrakenOrderType::TakeProfitLimit => Self::LimitIfTouched,
+            KrakenOrderType::TrailingStop => Self::StopMarket,
+            KrakenOrderType::TrailingStopLimit => Self::StopLimit,
             KrakenOrderType::SettlePosition => Self::Market,
         }
     }
@@ -790,6 +916,12 @@ impl From<KrakenFuturesOrderType> for OrderType {
             KrakenFuturesOrderType::Stop | KrakenFuturesOrderType::StopLower => Self::StopMarket,
             KrakenFuturesOrderType::TakeProfit => Self::MarketIfTouched,
             KrakenFuturesOrderType::StopLoss => Self::StopMarket,
+            KrakenFuturesOrderType::Unknown => {
+                log::warn!(
+                    "KrakenFuturesOrderType::Unknown received from venue, defaulting to Market"
+                );
+                Self::Market
+            }
         }
     }
 }
@@ -818,6 +950,18 @@ impl From<KrakenFuturesOrderStatus> for OrderStatus {
     }
 }
 
+impl From<KrakenPairStatus> for MarketStatusAction {
+    fn from(value: KrakenPairStatus) -> Self {
+        match value {
+            KrakenPairStatus::Online => Self::Trading,
+            KrakenPairStatus::CancelOnly => Self::Halt,
+            KrakenPairStatus::PostOnly => Self::Pause,
+            KrakenPairStatus::LimitOnly => Self::Pause,
+            KrakenPairStatus::ReduceOnly => Self::Pause,
+        }
+    }
+}
+
 /// Determines the product type from a Kraken symbol.
 ///
 /// Futures symbols have the following prefixes:
@@ -839,5 +983,131 @@ pub fn product_type_from_symbol(symbol: &str) -> KrakenProductType {
         KrakenProductType::Futures
     } else {
         KrakenProductType::Spot
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nautilus_model::enums::{MarketStatusAction, OrderType};
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::online(KrakenPairStatus::Online, MarketStatusAction::Trading)]
+    #[case::cancel_only(KrakenPairStatus::CancelOnly, MarketStatusAction::Halt)]
+    #[case::post_only(KrakenPairStatus::PostOnly, MarketStatusAction::Pause)]
+    #[case::limit_only(KrakenPairStatus::LimitOnly, MarketStatusAction::Pause)]
+    #[case::reduce_only(KrakenPairStatus::ReduceOnly, MarketStatusAction::Pause)]
+    fn test_pair_status_to_market_status_action(
+        #[case] input: KrakenPairStatus,
+        #[case] expected: MarketStatusAction,
+    ) {
+        assert_eq!(MarketStatusAction::from(input), expected);
+    }
+
+    #[rstest]
+    #[case::trailing_stop(KrakenOrderType::TrailingStop, OrderType::StopMarket)]
+    #[case::trailing_stop_limit(KrakenOrderType::TrailingStopLimit, OrderType::StopLimit)]
+    fn test_trailing_stop_order_type_mapping(
+        #[case] input: KrakenOrderType,
+        #[case] expected: OrderType,
+    ) {
+        assert_eq!(OrderType::from(input), expected);
+    }
+
+    #[rstest]
+    #[case("\"placed\"", KrakenSendStatus::Placed)]
+    #[case("\"cancelled\"", KrakenSendStatus::Cancelled)]
+    #[case("\"edited\"", KrakenSendStatus::Edited)]
+    #[case("\"notFound\"", KrakenSendStatus::NotFound)]
+    #[case("\"noOrdersToCancel\"", KrakenSendStatus::NoOrdersToCancel)]
+    #[case(
+        "\"insufficientAvailableFunds\"",
+        KrakenSendStatus::InsufficientAvailableFunds
+    )]
+    #[case("\"invalidOrderType\"", KrakenSendStatus::InvalidOrderType)]
+    #[case("\"invalidSize\"", KrakenSendStatus::InvalidSize)]
+    #[case("\"wouldCauseLiquidation\"", KrakenSendStatus::WouldCauseLiquidation)]
+    #[case("\"postWouldExecute\"", KrakenSendStatus::PostWouldExecute)]
+    #[case(
+        "\"reduceOnlyWouldIncreasePosition\"",
+        KrakenSendStatus::ReduceOnlyWouldIncreasePosition
+    )]
+    fn test_send_status_deserialization(#[case] raw: &str, #[case] expected: KrakenSendStatus) {
+        let parsed: KrakenSendStatus = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed, expected);
+    }
+
+    #[rstest]
+    #[case("\"last\"", KrakenTriggerSignal::Last)]
+    #[case("\"last_price\"", KrakenTriggerSignal::Last)]
+    #[case("\"mark\"", KrakenTriggerSignal::Mark)]
+    #[case("\"mark_price\"", KrakenTriggerSignal::Mark)]
+    #[case("\"spot\"", KrakenTriggerSignal::Index)]
+    #[case("\"spot_price\"", KrakenTriggerSignal::Index)]
+    #[case("\"index\"", KrakenTriggerSignal::Index)]
+    #[case("\"index_price\"", KrakenTriggerSignal::Index)]
+    #[case("\"unknown\"", KrakenTriggerSignal::Unknown)]
+    fn test_trigger_signal_deserialization(
+        #[case] raw: &str,
+        #[case] expected: KrakenTriggerSignal,
+    ) {
+        let parsed: KrakenTriggerSignal = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed, expected);
+    }
+
+    #[rstest]
+    #[case("\"trigger_above\"", KrakenTriggerSide::TriggerAbove)]
+    #[case("\"trigger_below\"", KrakenTriggerSide::TriggerBelow)]
+    #[case("\"unknown\"", KrakenTriggerSide::Unknown)]
+    fn test_trigger_side_deserialization(#[case] raw: &str, #[case] expected: KrakenTriggerSide) {
+        let parsed: KrakenTriggerSide = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed, expected);
+    }
+
+    #[rstest]
+    #[case("\"lmt\"", KrakenFuturesOrderType::Limit)]
+    #[case("\"limit\"", KrakenFuturesOrderType::Limit)]
+    #[case("\"ioc\"", KrakenFuturesOrderType::Ioc)]
+    #[case("\"post\"", KrakenFuturesOrderType::Post)]
+    #[case("\"mkt\"", KrakenFuturesOrderType::Market)]
+    #[case("\"market\"", KrakenFuturesOrderType::Market)]
+    #[case("\"stp\"", KrakenFuturesOrderType::Stop)]
+    #[case("\"stop\"", KrakenFuturesOrderType::StopLower)]
+    #[case("\"take_profit\"", KrakenFuturesOrderType::TakeProfit)]
+    #[case("\"stop_loss\"", KrakenFuturesOrderType::StopLoss)]
+    #[case("\"unknown\"", KrakenFuturesOrderType::Unknown)]
+    fn test_futures_order_type_deserialization(
+        #[case] raw: &str,
+        #[case] expected: KrakenFuturesOrderType,
+    ) {
+        let parsed: KrakenFuturesOrderType = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed, expected);
+    }
+
+    #[rstest]
+    fn test_futures_order_type_unknown_maps_to_market_default() {
+        assert_eq!(
+            OrderType::from(KrakenFuturesOrderType::Unknown),
+            OrderType::Market,
+        );
+    }
+
+    #[rstest]
+    #[case("\"PLACE\"", KrakenFuturesOrderEventType::Place)]
+    #[case("\"FILL\"", KrakenFuturesOrderEventType::Fill)]
+    #[case("\"EXECUTION\"", KrakenFuturesOrderEventType::Execution)]
+    #[case("\"REJECT\"", KrakenFuturesOrderEventType::Reject)]
+    #[case("\"CANCEL\"", KrakenFuturesOrderEventType::Cancel)]
+    #[case("\"EDIT\"", KrakenFuturesOrderEventType::Edit)]
+    #[case("\"EXPIRE\"", KrakenFuturesOrderEventType::Expire)]
+    #[case("\"EXPIRED\"", KrakenFuturesOrderEventType::Expire)]
+    fn test_futures_order_event_type_deserialization(
+        #[case] raw: &str,
+        #[case] expected: KrakenFuturesOrderEventType,
+    ) {
+        let parsed: KrakenFuturesOrderEventType = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed, expected);
     }
 }

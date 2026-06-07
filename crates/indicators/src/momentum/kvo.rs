@@ -28,6 +28,10 @@ use crate::{
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.indicators", unsendable)
 )]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.indicators")
+)]
 pub struct KlingerVolumeOscillator {
     pub fast_period: usize,
     pub slow_period: usize,
@@ -147,6 +151,7 @@ impl KlingerVolumeOscillator {
         // initialization logic
         if !self.initialized {
             self.has_inputs = true;
+
             if self.signal_ma.initialized() {
                 self.initialized = true;
             }
@@ -155,9 +160,10 @@ impl KlingerVolumeOscillator {
         self.previous_hlc3 = self.hlc3;
     }
 
-    pub fn _check_initialized(&mut self) {
+    pub fn check_initialized(&mut self) {
         if !self.initialized {
             self.has_inputs = true;
+
             if self.signal_ma.initialized() {
                 self.initialized = true;
             }

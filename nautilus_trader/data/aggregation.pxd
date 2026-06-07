@@ -26,6 +26,8 @@ from nautilus_trader.common.component cimport TimeEvent
 from nautilus_trader.common.data_topics cimport TopicCache
 from nautilus_trader.core.rust.model cimport AggressorSide
 from nautilus_trader.core.rust.model cimport InstrumentClass
+from nautilus_trader.core.rust.model cimport PriceRaw
+from nautilus_trader.core.rust.model cimport QuantityRaw
 from nautilus_trader.model.data cimport Bar
 from nautilus_trader.model.data cimport BarType
 from nautilus_trader.model.data cimport QuoteTick
@@ -58,11 +60,22 @@ cdef class BarBuilder:
     cdef Price _close
     cdef Quantity volume
 
+    # Adjustment state pre-computed at `set_adjustment` time so the hot update path
+    # performs only raw C math (no Decimal allocation per tick).
+    cdef readonly object _adjustment_mode
+    cdef PriceRaw _adjustment_raw
+    cdef double _adjustment_ratio
+    cdef bint _adjustment_active
+    cdef bint _adjustment_is_ratio
+
     cpdef void update(self, Price price, Quantity size, uint64_t ts_init)
     cpdef void update_bar(self, Bar bar, Quantity volume, uint64_t ts_init)
-    cpdef void reset(self)
+    cpdef void set_adjustment(self, object adjustment, object mode = *)
     cpdef Bar build_now(self)
     cpdef Bar build(self, uint64_t ts_event, uint64_t ts_init)
+    cpdef void reset(self)
+
+    cdef Price _apply_adjustment_to_price(self, Price price)
 
 
 cdef class BarAggregator:
@@ -109,15 +122,15 @@ cdef class VolumeBarAggregator(BarAggregator):
 
 
 cdef class VolumeImbalanceBarAggregator(BarAggregator):
-    cdef long long _imbalance_raw
-    cdef long long _raw_step
+    cdef PriceRaw _imbalance_raw
+    cdef PriceRaw _raw_step
 
 
 cdef class VolumeRunsBarAggregator(BarAggregator):
     cdef AggressorSide _current_run_side
     cdef bint _has_run_side
-    cdef long long _run_volume_raw
-    cdef long long _raw_step
+    cdef QuantityRaw _run_volume_raw
+    cdef QuantityRaw _raw_step
 
 
 cdef class ValueBarAggregator(BarAggregator):
@@ -211,6 +224,7 @@ cdef class SpreadQuoteAggregator:
     cpdef void set_running(self, bint is_running)
     cpdef void set_clock(self, Clock clock)
     cpdef void handle_quote_tick(self, QuoteTick tick)
+    cpdef void flush_pending_historical_quotes(self)
 
     cdef void _process_historical_events(self, uint64_t ts_init)
     cdef void _build_and_send_quote(self, uint64_t ts_event)

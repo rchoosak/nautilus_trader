@@ -18,6 +18,7 @@
 use nautilus_model::enums::{
     MarketStatus as NautilusMarketStatus, OrderSide, OrderStatus, OrderType, TimeInForce,
 };
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumIter, EnumString};
 
@@ -703,6 +704,77 @@ pub enum RollupModel {
     None,
 }
 
+/// Certificate-based login response status.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    Display,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
+pub enum CertLoginStatus {
+    Success,
+    NoError,
+    Fail,
+    AccountAlreadyLocked,
+    AccountNowLocked,
+    AccountPendingPasswordChange,
+    ActionsRequired,
+    AgentClientMaster,
+    AgentClientMasterSuspended,
+    AuthorizedOnlyForDomainRo,
+    AuthorizedOnlyForDomainSe,
+    BettingRestrictedLocation,
+    CertAuthRequired,
+    ChangePasswordRequired,
+    Closed,
+    DanishAuthorizationRequired,
+    DenmarkMigrationRequired,
+    DuplicateCards,
+    EmailLoginNotAllowed,
+    InputValidationError,
+    InternalError,
+    InternationalTermsAcceptanceRequired,
+    InvalidConnectivityToRegulatorDk,
+    InvalidConnectivityToRegulatorIt,
+    InvalidUsernameOrPassword,
+    ItalianContractAcceptanceRequired,
+    ItalianProfilingAcceptanceRequired,
+    KycSuspend,
+    LoginRestricted,
+    MultipleUsersWithSameCredential,
+    NotAuthorizedByRegulatorDk,
+    NotAuthorizedByRegulatorIt,
+    PendingAuth,
+    PersonalMessageRequired,
+    #[serde(rename = "SECURITY_QUESTION_WRONG_3X")]
+    #[strum(serialize = "SECURITY_QUESTION_WRONG_3X")]
+    SecurityQuestionWrong3x,
+    SecurityRestrictedLocation,
+    SelfExcluded,
+    SpainMigrationRequired,
+    SpanishTermsAcceptanceRequired,
+    StrongAuthCodeRequired,
+    Suspended,
+    SwedenBankIdVerificationRequired,
+    SwedenNationalIdentifierRequired,
+    TelbetTermsConditionsNa,
+    TemporaryBanTooManyRequests,
+    TradingMaster,
+    TradingMasterSuspended,
+    #[serde(other)]
+    Other,
+}
+
 /// Streaming order side (shorthand: B=Back, L=Lay).
 #[derive(
     Clone,
@@ -837,6 +909,22 @@ pub enum StatusErrorCode {
     UnexpectedError,
     ConnectionFailed,
     InvalidRequest,
+}
+
+impl StatusErrorCode {
+    /// Returns `true` for errors that will never succeed on retry and should
+    /// permanently disable the race stream.
+    #[must_use]
+    pub fn is_race_stream_fatal(&self) -> bool {
+        matches!(
+            self,
+            Self::NoAppKey
+                | Self::InvalidAppKey
+                | Self::NotAuthorized
+                | Self::SubscriptionLimitExceeded
+                | Self::MaxConnectionLimitExceeded
+        )
+    }
 }
 
 /// Streaming change type.
@@ -1007,12 +1095,14 @@ impl From<StreamingOrderType> for OrderType {
 #[must_use]
 pub fn resolve_order_status(
     status: BetfairOrderStatus,
-    size_matched: f64,
-    size_cancelled: f64,
+    size_matched: Decimal,
+    size_cancelled: Decimal,
 ) -> OrderStatus {
     match status {
         BetfairOrderStatus::Pending => OrderStatus::Submitted,
-        BetfairOrderStatus::Executable if size_matched > 0.0 => OrderStatus::PartiallyFilled,
+        BetfairOrderStatus::Executable if size_matched > Decimal::ZERO => {
+            OrderStatus::PartiallyFilled
+        }
         BetfairOrderStatus::Executable => OrderStatus::Accepted,
         BetfairOrderStatus::Expired => OrderStatus::Expired,
         BetfairOrderStatus::ExecutionComplete => {
@@ -1027,11 +1117,13 @@ pub fn resolve_order_status(
 #[must_use]
 pub fn resolve_streaming_order_status(
     status: StreamingOrderStatus,
-    size_matched: f64,
-    size_cancelled: f64,
+    size_matched: Decimal,
+    size_cancelled: Decimal,
 ) -> OrderStatus {
     match status {
-        StreamingOrderStatus::Executable if size_matched > 0.0 => OrderStatus::PartiallyFilled,
+        StreamingOrderStatus::Executable if size_matched > Decimal::ZERO => {
+            OrderStatus::PartiallyFilled
+        }
         StreamingOrderStatus::Executable => OrderStatus::Accepted,
         StreamingOrderStatus::ExecutionComplete => {
             resolve_terminal_status(size_matched, size_cancelled)
@@ -1039,8 +1131,8 @@ pub fn resolve_streaming_order_status(
     }
 }
 
-fn resolve_terminal_status(size_matched: f64, size_cancelled: f64) -> OrderStatus {
-    if size_matched > 0.0 && size_cancelled <= 0.0 {
+fn resolve_terminal_status(size_matched: Decimal, size_cancelled: Decimal) -> OrderStatus {
+    if size_matched > Decimal::ZERO && size_cancelled <= Decimal::ZERO {
         OrderStatus::Filled
     } else {
         // Any terminal order with cancelled quantity is closed, even if
@@ -1145,15 +1237,15 @@ mod tests {
     #[rstest]
     fn test_resolve_order_status_non_terminal() {
         assert_eq!(
-            resolve_order_status(BetfairOrderStatus::Pending, 0.0, 0.0),
+            resolve_order_status(BetfairOrderStatus::Pending, Decimal::ZERO, Decimal::ZERO),
             OrderStatus::Submitted,
         );
         assert_eq!(
-            resolve_order_status(BetfairOrderStatus::Executable, 0.0, 0.0),
+            resolve_order_status(BetfairOrderStatus::Executable, Decimal::ZERO, Decimal::ZERO),
             OrderStatus::Accepted,
         );
         assert_eq!(
-            resolve_order_status(BetfairOrderStatus::Expired, 0.0, 0.0),
+            resolve_order_status(BetfairOrderStatus::Expired, Decimal::ZERO, Decimal::ZERO),
             OrderStatus::Expired,
         );
     }
@@ -1161,18 +1253,22 @@ mod tests {
     #[rstest]
     fn test_resolve_order_status_executable_partially_matched() {
         assert_eq!(
-            resolve_order_status(BetfairOrderStatus::Executable, 5.0, 0.0),
+            resolve_order_status(
+                BetfairOrderStatus::Executable,
+                Decimal::new(5, 0),
+                Decimal::ZERO
+            ),
             OrderStatus::PartiallyFilled,
         );
     }
 
     #[rstest]
-    #[case(10.0, 0.0, OrderStatus::Filled)]
-    #[case(5.0, 5.0, OrderStatus::Canceled)]
-    #[case(0.0, 10.0, OrderStatus::Canceled)]
+    #[case(Decimal::TEN, Decimal::ZERO, OrderStatus::Filled)]
+    #[case(Decimal::new(5, 0), Decimal::new(5, 0), OrderStatus::Canceled)]
+    #[case(Decimal::ZERO, Decimal::TEN, OrderStatus::Canceled)]
     fn test_resolve_order_status_execution_complete(
-        #[case] size_matched: f64,
-        #[case] size_cancelled: f64,
+        #[case] size_matched: Decimal,
+        #[case] size_cancelled: Decimal,
         #[case] expected: OrderStatus,
     ) {
         assert_eq!(
@@ -1188,7 +1284,11 @@ mod tests {
     #[rstest]
     fn test_resolve_streaming_order_status_executable() {
         assert_eq!(
-            resolve_streaming_order_status(StreamingOrderStatus::Executable, 0.0, 0.0),
+            resolve_streaming_order_status(
+                StreamingOrderStatus::Executable,
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
             OrderStatus::Accepted,
         );
     }
@@ -1196,18 +1296,22 @@ mod tests {
     #[rstest]
     fn test_resolve_streaming_order_status_executable_partially_matched() {
         assert_eq!(
-            resolve_streaming_order_status(StreamingOrderStatus::Executable, 5.0, 0.0),
+            resolve_streaming_order_status(
+                StreamingOrderStatus::Executable,
+                Decimal::new(5, 0),
+                Decimal::ZERO,
+            ),
             OrderStatus::PartiallyFilled,
         );
     }
 
     #[rstest]
-    #[case(10.0, 0.0, OrderStatus::Filled)]
-    #[case(5.0, 5.0, OrderStatus::Canceled)]
-    #[case(0.0, 10.0, OrderStatus::Canceled)]
+    #[case(Decimal::TEN, Decimal::ZERO, OrderStatus::Filled)]
+    #[case(Decimal::new(5, 0), Decimal::new(5, 0), OrderStatus::Canceled)]
+    #[case(Decimal::ZERO, Decimal::TEN, OrderStatus::Canceled)]
     fn test_resolve_streaming_order_status_execution_complete(
-        #[case] size_matched: f64,
-        #[case] size_cancelled: f64,
+        #[case] size_matched: Decimal,
+        #[case] size_cancelled: Decimal,
         #[case] expected: OrderStatus,
     ) {
         assert_eq!(
@@ -1257,5 +1361,46 @@ mod tests {
         #[case] expected: TimeInForce,
     ) {
         assert_eq!(TimeInForce::from(input), expected);
+    }
+
+    #[rstest]
+    fn test_resolve_streaming_lapsed_and_voided_count_as_closed() {
+        // size_closed includes lapsed + voided, so these should resolve to Canceled
+        // even if size_cancelled itself is zero (the caller aggregates them)
+        assert_eq!(
+            resolve_streaming_order_status(
+                StreamingOrderStatus::ExecutionComplete,
+                Decimal::ZERO,
+                Decimal::new(5, 0), // aggregated lapsed/voided/cancelled
+            ),
+            OrderStatus::Canceled,
+        );
+    }
+
+    #[rstest]
+    fn test_resolve_streaming_partial_match_then_cancel() {
+        // Partially matched then remainder cancelled
+        assert_eq!(
+            resolve_streaming_order_status(
+                StreamingOrderStatus::ExecutionComplete,
+                Decimal::new(3, 0), // matched
+                Decimal::new(7, 0), // cancelled remainder
+            ),
+            OrderStatus::Canceled,
+        );
+    }
+
+    #[rstest]
+    #[case(StatusErrorCode::NoAppKey, true)]
+    #[case(StatusErrorCode::InvalidAppKey, true)]
+    #[case(StatusErrorCode::NotAuthorized, true)]
+    #[case(StatusErrorCode::SubscriptionLimitExceeded, true)]
+    #[case(StatusErrorCode::MaxConnectionLimitExceeded, true)]
+    #[case(StatusErrorCode::InvalidClock, false)]
+    #[case(StatusErrorCode::Timeout, false)]
+    #[case(StatusErrorCode::InvalidInput, false)]
+    #[case(StatusErrorCode::TooManyRequests, false)]
+    fn test_is_race_stream_fatal(#[case] code: StatusErrorCode, #[case] expected: bool) {
+        assert_eq!(code.is_race_stream_fatal(), expected);
     }
 }

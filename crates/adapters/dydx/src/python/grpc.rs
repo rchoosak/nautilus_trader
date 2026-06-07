@@ -15,22 +15,25 @@
 
 //! Python bindings for dYdX gRPC client.
 
-#![allow(clippy::missing_errors_doc)]
-
 use std::sync::Arc;
 
-use nautilus_core::python::{IntoPyObjectNautilusExt, to_pyruntime_err};
+use nautilus_core::{
+    hex,
+    python::{IntoPyObjectNautilusExt, to_pyruntime_err},
+};
 use pyo3::prelude::*;
 
 use crate::grpc::DydxGrpcClient;
 
 #[pyclass(name = "DydxGrpcClient", from_py_object)]
+#[pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.dydx")]
 #[derive(Debug, Clone)]
 pub struct PyDydxGrpcClient {
     pub(crate) inner: Arc<DydxGrpcClient>,
 }
 
 #[pymethods]
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
 impl PyDydxGrpcClient {
     /// Create a new gRPC client.
     ///
@@ -193,11 +196,13 @@ impl PyDydxGrpcClient {
             Python::attach(|py| {
                 use pyo3::types::PyDict;
                 let dict = PyDict::new(py);
+
                 if let Some(default_node_info) = info.default_node_info {
                     dict.set_item("network", default_node_info.network)?;
                     dict.set_item("moniker", default_node_info.moniker)?;
                     dict.set_item("version", default_node_info.version)?;
                 }
+
                 if let Some(app_info) = info.application_version {
                     dict.set_item("app_name", app_info.name)?;
                     dict.set_item("app_version", app_info.version)?;

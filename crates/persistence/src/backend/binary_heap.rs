@@ -20,6 +20,10 @@
 //! Original source: <https://github.com/sekineh/binary-heap-plus-rs>
 
 #![deny(unsafe_op_in_unsafe_fn)]
+#![allow(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "vendored heap chains pointer ops; SAFETY comments justify each block"
+)]
 
 use std::{
     fmt,
@@ -348,6 +352,7 @@ impl<'a, T> Hole<'a, T> {
     unsafe fn move_to(&mut self, index: usize) {
         debug_assert!(index != self.pos);
         debug_assert!(index < self.data.len());
+        // SAFETY: `index` and `pos` are bounds-checked by the debug assertions above.
         unsafe {
             let ptr = self.data.as_mut_ptr();
             let index_ptr: *const _ = ptr.add(index);
@@ -361,7 +366,8 @@ impl<'a, T> Hole<'a, T> {
 impl<T> Drop for Hole<'_, T> {
     #[inline]
     fn drop(&mut self) {
-        // Fill the hole again
+        // SAFETY: `pos` was valid when the hole was created and all moves
+        // maintain the invariant that `pos < data.len()`.
         unsafe {
             let pos = self.pos;
             ptr::copy_nonoverlapping(

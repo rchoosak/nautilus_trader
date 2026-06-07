@@ -18,7 +18,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from nautilus_trader.adapters.hyperliquid.constants import HYPERLIQUID_VENUE
 from nautilus_trader.adapters.hyperliquid.enums import DEFAULT_PRODUCT_TYPES
 from nautilus_trader.adapters.hyperliquid.enums import HyperliquidProductType
 from nautilus_trader.common.providers import InstrumentProvider
@@ -26,6 +25,7 @@ from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.correctness import PyCondition
 from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.instruments import BinaryOption
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.instruments import CurrencyPair
 from nautilus_trader.model.instruments import Instrument
@@ -54,6 +54,7 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
             if product_types is None
             else frozenset(HyperliquidProductType(pt) for pt in product_types)
         )
+
         if not resolved_types:
             raise ValueError("product_types must contain at least one entry")
 
@@ -95,13 +96,14 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
     async def _load_instruments(self) -> list[Instrument]:
         try:
             pyo3_instruments = await self._client.load_instrument_definitions(
-                include_perp=HyperliquidProductType.PERP in self._product_types,
                 include_spot=HyperliquidProductType.SPOT in self._product_types,
+                include_perps=HyperliquidProductType.PERP in self._product_types,
+                include_perps_hip3=HyperliquidProductType.PERP_HIP3 in self._product_types,
+                include_outcomes=HyperliquidProductType.OUTCOME in self._product_types,
             )
             # Store PyO3 instruments for WebSocket client
             self._instruments_pyo3 = pyo3_instruments
-            # Convert PyO3 instruments to Python (Cython) instruments
-            # This is necessary because the data engine expects Python instruments
+
             instruments = instruments_from_pyo3(pyo3_instruments)
             return instruments
         except AttributeError:  # method missing (old wheel?)
@@ -149,51 +151,18 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
         instrument: Instrument,
     ) -> HyperliquidProductType | None:
         if isinstance(instrument, CryptoPerpetual):
+            if ":" in instrument.id.symbol.value:
+                return HyperliquidProductType.PERP_HIP3
             return HyperliquidProductType.PERP
         if isinstance(instrument, CurrencyPair):
             return HyperliquidProductType.SPOT
+        if isinstance(instrument, BinaryOption):
+            return HyperliquidProductType.OUTCOME
 
         self._log.warning(
             f"Ignoring Hyperliquid instrument {instrument.id.value} (unsupported type {type(instrument).__name__})",
         )
         return None
-
-    async def load_ids_async(
-        self,
-        instrument_ids: list[InstrumentId],
-        filters: dict | None = None,
-    ) -> None:
-        PyCondition.not_none(instrument_ids, "instrument_ids")
-        if not instrument_ids:
-            self._log.debug("No instrument IDs provided; nothing to load")
-            return
-
-        for instrument_id in instrument_ids:
-            PyCondition.equal(
-                instrument_id.venue,
-                HYPERLIQUID_VENUE,
-                "instrument_id.venue",
-                HYPERLIQUID_VENUE.value,
-            )
-
-        # We currently fetch the full catalog (low cost) and rely on filtering afterwards.
-        await self.load_all_async(filters)
-
-        missing = [i for i in instrument_ids if i not in self._instruments]
-        if missing:
-            self._log.warning(
-                "Unable to load %d Hyperliquid instruments: %s",
-                len(missing),
-                ", ".join(i.value for i in missing),
-            )
-
-    async def load_async(
-        self,
-        instrument_id: InstrumentId,
-        filters: dict | None = None,
-    ) -> None:
-        PyCondition.not_none(instrument_id, "instrument_id")
-        await self.load_ids_async([instrument_id], filters)
 
     def _accept_instrument(
         self,
@@ -216,7 +185,12 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
                 if isinstance(item, str)
             }
 
-        market_type = "perp" if isinstance(instrument, CryptoPerpetual) else "spot"
+        if isinstance(instrument, CryptoPerpetual):
+            market_type = "perp_hip3" if ":" in instrument.id.symbol.value else "perp"
+        elif isinstance(instrument, BinaryOption):
+            market_type = "outcome"
+        else:
+            market_type = "spot"
         kinds = _normalize(filters.get("market_types") or filters.get("kinds"), to_lower=True)
         if kinds and market_type not in kinds:
             return False

@@ -15,12 +15,24 @@
 
 use std::{sync::LazyLock, time::Duration};
 
-use nautilus_model::{enums::OrderType, identifiers::Venue};
+use nautilus_model::{
+    enums::OrderType,
+    identifiers::{ClientId, Venue},
+};
 use ustr::Ustr;
 
+use super::enums::HyperliquidEnvironment;
+
+/// Venue identifier string.
 pub const HYPERLIQUID: &str = "HYPERLIQUID";
+
+/// Static venue instance.
 pub static HYPERLIQUID_VENUE: LazyLock<Venue> =
     LazyLock::new(|| Venue::new(Ustr::from(HYPERLIQUID)));
+
+/// Static client ID instance.
+pub static HYPERLIQUID_CLIENT_ID: LazyLock<ClientId> =
+    LazyLock::new(|| ClientId::new(Ustr::from(HYPERLIQUID)));
 
 pub const HYPERLIQUID_WS_URL: &str = "wss://api.hyperliquid.xyz/ws";
 pub const HYPERLIQUID_INFO_URL: &str = "https://api.hyperliquid.xyz/info";
@@ -30,17 +42,9 @@ pub const HYPERLIQUID_TESTNET_WS_URL: &str = "wss://api.hyperliquid-testnet.xyz/
 pub const HYPERLIQUID_TESTNET_INFO_URL: &str = "https://api.hyperliquid-testnet.xyz/info";
 pub const HYPERLIQUID_TESTNET_EXCHANGE_URL: &str = "https://api.hyperliquid-testnet.xyz/exchange";
 
-// Builder codes fee configuration for rebates
-// - https://hyperliquid.gitbook.io/hyperliquid-docs/trading/builder-codes
-// - https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees
-// Fee is specified in tenths of a basis point (0.1 bps)
-// Note: Address MUST be lowercase for msgpack serialization to match Python SDK
-pub const NAUTILUS_BUILDER_FEE_ADDRESS: &str = "0x0c8d970c462726e014ad36f6c5a63e99db48a8e7";
-pub const NAUTILUS_BUILDER_FEE_TAKER_TENTHS_BP: u32 = 10; // 1 bp = 0.01%
-pub const NAUTILUS_BUILDER_FEE_MAKER_TENTHS_BP: u32 = 4; // 0.4 bp = 0.004% (base tier, scales with volume)
-
-/// Default interval in minutes for periodic builder fee tier refresh.
-pub const BUILDER_FEE_REFRESH_DEFAULT_MINS: u64 = 60;
+// Builder code address for order attribution (zero-fee)
+// Address MUST be lowercase for msgpack serialization
+pub const NAUTILUS_BUILDER_ADDRESS: &str = "0x0c8d970c462726e014ad36f6c5a63e99db48a8e7";
 
 /// Hyperliquid signing chain ID (0x66eee = 421614 decimal).
 pub const HYPERLIQUID_CHAIN_ID: u64 = 421614;
@@ -48,7 +52,6 @@ pub const HYPERLIQUID_CHAIN_ID: u64 = 421614;
 // Error message substrings for detecting specific rejection reasons
 pub const HYPERLIQUID_POST_ONLY_WOULD_MATCH: &str =
     "Post only order would have immediately matched";
-pub const HYPERLIQUID_BUILDER_FEE_NOT_APPROVED: &str = "Builder fee has not been approved";
 
 /// Hyperliquid supported order types.
 ///
@@ -59,6 +62,11 @@ pub const HYPERLIQUID_BUILDER_FEE_NOT_APPROVED: &str = "Builder fee has not been
 /// - Stop orders (StopMarket/StopLimit) are protective stops (sl).
 /// - If Touched orders (MarketIfTouched/LimitIfTouched) are profit-taking or entry orders (tp).
 /// - Post-only orders are implemented via ALO (Add Liquidity Only) time-in-force.
+///
+/// Trailing stops (TrailingStopMarket/TrailingStopLimit) are supported by the exchange
+/// and can be parsed from incoming WS messages, but the outgoing request model does not
+/// yet serialize the trailing offset parameters. Add them once HyperliquidExecTriggerParams
+/// is extended with trailing offset fields.
 pub const HYPERLIQUID_SUPPORTED_ORDER_TYPES: &[OrderType] = &[
     OrderType::Market,          // IOC limit order
     OrderType::Limit,           // Standard limit with GTC/IOC/ALO
@@ -79,30 +87,27 @@ pub const HYPERLIQUID_CONDITIONAL_ORDER_TYPES: &[OrderType] = &[
     OrderType::LimitIfTouched,
 ];
 
-/// Gets WebSocket URL for the specified network.
-pub fn ws_url(is_testnet: bool) -> &'static str {
-    if is_testnet {
-        HYPERLIQUID_TESTNET_WS_URL
-    } else {
-        HYPERLIQUID_WS_URL
+/// Gets WebSocket URL for the specified environment.
+pub fn ws_url(environment: HyperliquidEnvironment) -> &'static str {
+    match environment {
+        HyperliquidEnvironment::Testnet => HYPERLIQUID_TESTNET_WS_URL,
+        HyperliquidEnvironment::Mainnet => HYPERLIQUID_WS_URL,
     }
 }
 
-/// Gets info API URL for the specified network.
-pub fn info_url(is_testnet: bool) -> &'static str {
-    if is_testnet {
-        HYPERLIQUID_TESTNET_INFO_URL
-    } else {
-        HYPERLIQUID_INFO_URL
+/// Gets info API URL for the specified environment.
+pub fn info_url(environment: HyperliquidEnvironment) -> &'static str {
+    match environment {
+        HyperliquidEnvironment::Testnet => HYPERLIQUID_TESTNET_INFO_URL,
+        HyperliquidEnvironment::Mainnet => HYPERLIQUID_INFO_URL,
     }
 }
 
-/// Gets exchange API URL for the specified network.
-pub fn exchange_url(is_testnet: bool) -> &'static str {
-    if is_testnet {
-        HYPERLIQUID_TESTNET_EXCHANGE_URL
-    } else {
-        HYPERLIQUID_EXCHANGE_URL
+/// Gets exchange API URL for the specified environment.
+pub fn exchange_url(environment: HyperliquidEnvironment) -> &'static str {
+    match environment {
+        HyperliquidEnvironment::Testnet => HYPERLIQUID_TESTNET_EXCHANGE_URL,
+        HyperliquidEnvironment::Mainnet => HYPERLIQUID_EXCHANGE_URL,
     }
 }
 
@@ -124,20 +129,35 @@ mod tests {
 
     #[rstest]
     fn test_ws_url() {
-        assert_eq!(ws_url(false), HYPERLIQUID_WS_URL);
-        assert_eq!(ws_url(true), HYPERLIQUID_TESTNET_WS_URL);
+        assert_eq!(ws_url(HyperliquidEnvironment::Mainnet), HYPERLIQUID_WS_URL);
+        assert_eq!(
+            ws_url(HyperliquidEnvironment::Testnet),
+            HYPERLIQUID_TESTNET_WS_URL
+        );
     }
 
     #[rstest]
     fn test_info_url() {
-        assert_eq!(info_url(false), HYPERLIQUID_INFO_URL);
-        assert_eq!(info_url(true), HYPERLIQUID_TESTNET_INFO_URL);
+        assert_eq!(
+            info_url(HyperliquidEnvironment::Mainnet),
+            HYPERLIQUID_INFO_URL
+        );
+        assert_eq!(
+            info_url(HyperliquidEnvironment::Testnet),
+            HYPERLIQUID_TESTNET_INFO_URL
+        );
     }
 
     #[rstest]
     fn test_exchange_url() {
-        assert_eq!(exchange_url(false), HYPERLIQUID_EXCHANGE_URL);
-        assert_eq!(exchange_url(true), HYPERLIQUID_TESTNET_EXCHANGE_URL);
+        assert_eq!(
+            exchange_url(HyperliquidEnvironment::Mainnet),
+            HYPERLIQUID_EXCHANGE_URL
+        );
+        assert_eq!(
+            exchange_url(HyperliquidEnvironment::Testnet),
+            HYPERLIQUID_TESTNET_EXCHANGE_URL
+        );
     }
 
     #[rstest]

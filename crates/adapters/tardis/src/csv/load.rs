@@ -28,6 +28,7 @@ use nautilus_model::{
 };
 
 use crate::{
+    common::parse::{parse_instrument_id, parse_timestamp},
     csv::{
         create_book_order, create_csv_reader, infer_precision, parse_delta_record,
         parse_derivative_ticker_record, parse_quote_record, parse_trade_record,
@@ -36,7 +37,6 @@ use crate::{
             TardisOrderBookSnapshot25Record, TardisQuoteRecord, TardisTradeRecord,
         },
     },
-    parse::{parse_instrument_id, parse_timestamp},
 };
 
 fn update_precision_if_needed(current: &mut u8, value: f64, explicit: Option<u8>) -> bool {
@@ -64,6 +64,7 @@ fn update_deltas_precision(
         if price_precision.is_none() {
             delta.order.price.precision = current_price_precision;
         }
+
         if size_precision.is_none() {
             delta.order.size.precision = current_size_precision;
         }
@@ -82,6 +83,7 @@ fn update_quotes_precision(
             quote.bid_price.precision = current_price_precision;
             quote.ask_price.precision = current_price_precision;
         }
+
         if size_precision.is_none() {
             quote.bid_size.precision = current_size_precision;
             quote.ask_size.precision = current_size_precision;
@@ -100,6 +102,7 @@ fn update_trades_precision(
         if price_precision.is_none() {
             trade.price.precision = current_price_precision;
         }
+
         if size_precision.is_none() {
             trade.size.precision = current_size_precision;
         }
@@ -274,6 +277,7 @@ pub fn load_depth10_from_snapshot5<P: AsRef<Path>>(
                         depth.bids[i].price.precision = current_price_precision;
                         depth.asks[i].price.precision = current_price_precision;
                     }
+
                     if size_precision.is_none() {
                         depth.bids[i].size.precision = current_size_precision;
                         depth.asks[i].size.precision = current_size_precision;
@@ -431,6 +435,7 @@ pub fn load_depth10_from_snapshot25<P: AsRef<Path>>(
                         depth.bids[i].price.precision = current_price_precision;
                         depth.asks[i].price.precision = current_price_precision;
                     }
+
                     if size_precision.is_none() {
                         depth.bids[i].size.precision = current_size_precision;
                         depth.asks[i].size.precision = current_size_precision;
@@ -754,7 +759,7 @@ mod tests {
     use rstest::*;
 
     use super::*;
-    use crate::{common::testing::get_test_data_path, parse::parse_price};
+    use crate::common::{parse::parse_price, testing::get_test_data_path};
 
     #[rstest]
     #[case(0.0, 0)]
@@ -992,6 +997,28 @@ binance-futures,BTCUSDT,1640995204000000,1640995204100000,false,ask,50000.1234,0
     }
 
     #[rstest]
+    pub fn test_load_trades_derives_id_when_csv_id_empty() {
+        // Two rows with empty `id` column must both hash deterministically
+        // to the same TradeId, and a row with differing price must hash differently.
+        let csv_data = "exchange,symbol,timestamp,local_timestamp,id,side,price,amount
+binance,BTCUSDT,1640995200000000,1640995200100000,,buy,50000.0,1.0
+binance,BTCUSDT,1640995200000000,1640995200100000,,buy,50000.0,1.0
+binance,BTCUSDT,1640995200000000,1640995200100000,,buy,50001.0,1.0";
+
+        let temp_file = std::env::temp_dir().join("test_load_trades_empty_id.csv");
+        std::fs::write(&temp_file, csv_data).unwrap();
+
+        let trades = load_trades(&temp_file, Some(2), Some(1), None, None).unwrap();
+        assert_eq!(trades.len(), 3);
+
+        assert_eq!(trades[0].trade_id, trades[1].trade_id);
+        assert_eq!(trades[0].trade_id.as_str().len(), 16);
+        assert_ne!(trades[0].trade_id, trades[2].trade_id);
+
+        std::fs::remove_file(&temp_file).ok();
+    }
+
+    #[rstest]
     pub fn test_load_trades_with_zero_sized_trade() {
         // Create test CSV data with one zero-sized trade that should be skipped
         let csv_data = "exchange,symbol,timestamp,local_timestamp,id,side,price,amount
@@ -1148,6 +1175,7 @@ binance,BTCUSDT,1640995203000000,1640995203100000,trade4,sell,49999.123,3.0";
             assert_eq!(first.bid_counts[i], 1);
             assert_eq!(first.ask_counts[i], 1);
         }
+
         for i in 5..10 {
             assert_eq!(first.bid_counts[i], 0);
             assert_eq!(first.ask_counts[i], 0);
@@ -1410,7 +1438,7 @@ binance-futures,BTCUSDT,1640995200000000,1640995200100000,true,ask,50001.0,2.0";
         let zstd_level = parquet::basic::ZstdLevel::try_new(3).unwrap();
         let props = WriterProperties::builder()
             .set_compression(parquet::basic::Compression::ZSTD(zstd_level))
-            .set_max_row_group_size(1_000_000)
+            .set_max_row_group_row_count(Some(1_000_000))
             .build();
         let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
 

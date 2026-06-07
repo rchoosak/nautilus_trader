@@ -6,9 +6,9 @@
 ![license](https://img.shields.io/github/license/nautechsystems/nautilus_trader?color=blue)
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/NautilusTrader)
 
-Data serialization and format conversion for [NautilusTrader](http://nautilustrader.io).
+Data serialization and format conversion for [NautilusTrader](https://nautilustrader.io).
 
-The `nautilus-serialization` crate provides comprehensive data serialization capabilities for converting
+The `nautilus-serialization` crate provides data serialization capabilities for converting
 trading data between different formats including Apache Arrow, Parquet, and Cap'n Proto.
 This enables efficient data storage, retrieval, and interoperability across different systems:
 
@@ -16,30 +16,33 @@ This enables efficient data storage, retrieval, and interoperability across diff
 - **Parquet file operations**: High-performance columnar storage for historical data analysis.
 - **Record batch processing**: Efficient batch operations for time-series data.
 - **Schema management**: Type-safe schema definitions with metadata preservation.
-- **Cross-format conversion**: Seamless data interchange between Arrow, Parquet, and native types.
+- **Cross-format conversion**: Data interchange between Arrow, Parquet, and native types.
 - **Cap'n Proto serialization**: Zero-copy, schema-based serialization for efficient data interchange.
+- **SBE decode utilities**: Zero-copy cursor, shared decode errors, and generic var/group decoders for SBE parsers.
 
-## Platform
+> [!WARNING]
+>
+> SBE and Cap'n Proto schemas are not yet stable and may break between releases.
 
-[NautilusTrader](http://nautilustrader.io) is an open-source, high-performance, production-grade
-algorithmic trading platform, providing quantitative traders with the ability to backtest
-portfolios of automated trading strategies on historical data with an event-driven engine,
-and also deploy those same strategies live, with no code changes.
+## NautilusTrader
 
-NautilusTrader's design, architecture, and implementation philosophy prioritizes software correctness and safety at the
-highest level, with the aim of supporting mission-critical, trading system backtesting and live deployment workloads.
+[NautilusTrader](https://nautilustrader.io) is an open-source, production-grade, Rust-native
+engine for multi-asset, multi-venue trading systems.
+
+The system spans research, deterministic simulation, and live execution within a single
+event-driven architecture, providing research-to-live semantic parity.
 
 ## Feature flags
 
-This crate provides feature flags to control source code inclusion during compilation,
-depending on the intended use case, i.e. whether to provide Python bindings
-for the [nautilus_trader](https://pypi.org/project/nautilus_trader) Python package,
-or as part of a Rust only build.
+This crate provides feature flags to control source code inclusion during compilation:
 
 - `python`: Enables Python bindings from [PyO3](https://pyo3.rs).
-- `extension-module`: Builds as a Python extension module (used with `python`).
+- `extension-module`: Builds as a Python extension module.
 - `high-precision`: Enables [high-precision mode](https://nautilustrader.io/docs/nightly/getting_started/installation#precision-mode) to use 128-bit value types.
+- `arrow`: Enables Apache Arrow schema definitions and RecordBatch encoding/decoding.
+- `display`: Enables display-friendly Arrow encoders for market data (requires `arrow`).
 - `capnp`: Enables [Cap'n Proto](https://capnproto.org/) serialization support.
+- `sbe`: Enables generic SBE (Simple Binary Encoding) decode utilities.
 
 ### Building with Cap'n Proto support
 
@@ -49,7 +52,7 @@ To build with Cap'n Proto serialization enabled:
 cargo build -p nautilus-serialization --features capnp
 ```
 
-The Cap'n Proto compiler is required. See the [Environment Setup](../../docs/developer_guide/environment_setup.md#capn-proto) guide for installation instructions. The required version is specified in the `capnp-version` file in the repository root.
+The Cap'n Proto compiler is required. See the [Environment Setup](../../docs/developer_guide/environment_setup.md#capn-proto) guide for installation instructions. The required version is specified in `tools.toml` in the repository root.
 
 ## Cap'n Proto schemas
 
@@ -213,7 +216,15 @@ let decoded = QuoteTick::from_capnp(root)?;
 
 ## Benchmarking
 
-Run benchmarks to compare serialization performance across formats:
+This crate has two different benchmark tracks:
+
+- `serialization_comparison` compares JSON, MsgPack, and Cap'n Proto for a smaller set of types
+- `market_data_capnp_vs_sbe` compares Cap'n Proto and SBE at the wire level across the full
+  market data surface
+
+### format comparison benchmarks
+
+Run benchmarks to compare JSON, MsgPack, and Cap'n Proto:
 
 ```bash
 # Compare all formats for QuoteTick
@@ -232,7 +243,29 @@ cargo bench -p nautilus-serialization --features capnp --bench capnp_serializati
 cargo bench -p nautilus-serialization --features capnp --bench serialization_comparison
 ```
 
-Benchmark results include serialization and deserialization times for each format.
+### SBE benchmarks
+
+Run the SBE microbenchmarks and the exhaustive Cap'n Proto vs SBE wire benchmarks:
+
+```bash
+# Run SBE cursor decode microbenchmarks
+cargo bench -p nautilus-serialization --no-default-features --features sbe --bench sbe_decoding
+
+# Run exhaustive market data wire benchmarks: Cap'n Proto vs SBE
+cargo bench -p nautilus-serialization --no-default-features --features "capnp sbe" --bench market_data_capnp_vs_sbe
+```
+
+The `market_data_capnp_vs_sbe` bench covers:
+
+- All supported market data wire types: `BookOrder`, `OrderBookDelta`, `OrderBookDeltas`,
+  `OrderBookDepth10`, `QuoteTick`, `TradeTick`, `BarType`, `Bar`, `MarkPriceUpdate`,
+  `IndexPriceUpdate`, `FundingRateUpdate`, `InstrumentStatus`, and `InstrumentClose`
+- `OrderBookDeltas` scaling at `1`, `10`, and `100` deltas
+- All `DataAny` market data variants
+- SBE encode, SBE encode with buffer reuse, SBE decode, Cap'n Proto encode, and Cap'n Proto decode
+
+Use `serialization_comparison` for general format tradeoffs. Use `market_data_capnp_vs_sbe` for
+SBE parity and wire-performance work.
 
 ## Documentation
 
@@ -241,7 +274,6 @@ See [the docs](https://docs.rs/nautilus-serialization) for more detailed usage.
 ## License
 
 The source code for NautilusTrader is available on GitHub under the [GNU Lesser General Public License v3.0](https://www.gnu.org/licenses/lgpl-3.0.en.html).
-Contributions to the project are welcome and require the completion of a standard [Contributor License Agreement (CLA)](https://github.com/nautechsystems/nautilus_trader/blob/develop/CLA.md).
 
 ---
 
@@ -249,6 +281,8 @@ NautilusTrader™ is developed and maintained by Nautech Systems, a technology
 company specializing in the development of high-performance trading systems.
 For more information, visit <https://nautilustrader.io>.
 
-<img src="https://github.com/nautechsystems/nautilus_trader/raw/develop/assets/nautilus-logo-white.png" alt="logo" width="400" height="auto"/>
+Use of this software is subject to the [Disclaimer](https://nautilustrader.io/legal/disclaimer/).
+
+<img src="https://github.com/nautechsystems/nautilus_trader/raw/develop/assets/nautilus-logo-white.png" alt="logo" width="300" height="auto"/>
 
 © 2015-2026 Nautech Systems Pty Ltd. All rights reserved.

@@ -38,7 +38,10 @@ use axum::{
     routing::get,
 };
 use nautilus_bybit::{
-    common::enums::{BybitEnvironment, BybitProductType},
+    common::{
+        consts::{BYBIT_CLIENT_ID, BYBIT_VENUE},
+        enums::{BybitEnvironment, BybitProductType},
+    },
     config::BybitDataClientConfig,
     data::BybitDataClient,
 };
@@ -47,16 +50,15 @@ use nautilus_common::{
     live::runner::set_data_event_sender,
     messages::{
         DataEvent,
-        data::{SubscribeBookDeltas, SubscribeQuotes, SubscribeTrades},
+        data::{
+            DataResponse, RequestBookSnapshot, RequestFundingRates, RequestInstrument,
+            RequestInstruments, SubscribeBookDeltas, SubscribeQuotes, SubscribeTrades,
+        },
     },
     testing::wait_until_async,
 };
 use nautilus_core::{UUID4, UnixNanos};
-use nautilus_model::{
-    data::Data,
-    enums::BookType,
-    identifiers::{ClientId, InstrumentId},
-};
+use nautilus_model::{data::Data, enums::BookType, identifiers::InstrumentId};
 use nautilus_network::http::HttpClient;
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -131,6 +133,16 @@ async fn handle_get_server_time() -> impl IntoResponse {
     }))
 }
 
+async fn handle_get_orderbook() -> impl IntoResponse {
+    let orderbook = load_test_data("http_get_orderbook.json");
+    Json(orderbook).into_response()
+}
+
+async fn handle_get_funding_history() -> impl IntoResponse {
+    let funding = load_test_data("http_get_funding_history.json");
+    Json(funding).into_response()
+}
+
 async fn handle_websocket(ws: WebSocketUpgrade, State(state): State<TestServerState>) -> Response {
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
@@ -178,6 +190,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                             "req_id": value.get("req_id").and_then(|v| v.as_str()).unwrap_or(""),
                             "op": "pong"
                         });
+
                         if socket
                             .send(Message::Text(pong_response.to_string().into()))
                             .await
@@ -212,6 +225,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                             "req_id": value.get("req_id").and_then(|v| v.as_str()).unwrap_or(""),
                             "op": "subscribe"
                         });
+
                         if socket
                             .send(Message::Text(sub_response.to_string().into()))
                             .await
@@ -225,6 +239,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                         {
                             if first_topic.contains("publicTrade") {
                                 let trade_msg = load_test_data("ws_public_trade.json");
+
                                 if socket
                                     .send(Message::Text(trade_msg.to_string().into()))
                                     .await
@@ -234,6 +249,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                                 }
                             } else if first_topic.contains("orderbook") {
                                 let orderbook_msg = load_test_data("ws_orderbook_snapshot.json");
+
                                 if socket
                                     .send(Message::Text(orderbook_msg.to_string().into()))
                                     .await
@@ -243,6 +259,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                                 }
                             } else if first_topic.contains("tickers") {
                                 let ticker_msg = load_test_data("ws_ticker_linear.json");
+
                                 if socket
                                     .send(Message::Text(ticker_msg.to_string().into()))
                                     .await
@@ -252,6 +269,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                                 }
                             } else if first_topic.contains("kline") {
                                 let kline_msg = load_test_data("ws_kline.json");
+
                                 if socket
                                     .send(Message::Text(kline_msg.to_string().into()))
                                     .await
@@ -284,6 +302,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                             "req_id": value.get("req_id").and_then(|v| v.as_str()).unwrap_or(""),
                             "op": "unsubscribe"
                         });
+
                         if socket
                             .send(Message::Text(unsub_response.to_string().into()))
                             .await
@@ -297,6 +316,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
             }
             Message::Ping(_) => {
                 state.ping_count.fetch_add(1, Ordering::Relaxed);
+
                 if socket.send(Message::Pong(vec![].into())).await.is_err() {
                     break;
                 }
@@ -315,6 +335,11 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
 fn create_test_router(state: TestServerState) -> Router {
     Router::new()
         .route("/v5/market/instruments-info", get(handle_get_instruments))
+        .route("/v5/market/orderbook", get(handle_get_orderbook))
+        .route(
+            "/v5/market/funding/history",
+            get(handle_get_funding_history),
+        )
         .route("/v5/account/fee-rate", get(handle_get_fee_rate))
         .route("/v3/public/time", get(handle_get_server_time))
         .route("/v5/public/linear", get(handle_websocket))
@@ -358,15 +383,16 @@ fn create_test_config(addr: SocketAddr) -> BybitDataClientConfig {
         base_url_http: Some(format!("http://{addr}")),
         base_url_ws_public: Some(format!("ws://{addr}/v5/public/linear")),
         base_url_ws_private: None,
-        http_proxy_url: None,
-        ws_proxy_url: None,
-        http_timeout_secs: Some(10),
-        max_retries: Some(1),
-        retry_delay_initial_ms: Some(100),
-        retry_delay_max_ms: Some(1000),
-        heartbeat_interval_secs: Some(5),
-        recv_window_ms: Some(5000),
+        proxy_url: None,
+        http_timeout_secs: 10,
+        max_retries: 1,
+        retry_delay_initial_ms: 100,
+        retry_delay_max_ms: 1000,
+        heartbeat_interval_secs: 5,
+        recv_window_ms: 5000,
         update_instruments_interval_mins: None,
+        instrument_status_poll_secs: None,
+        transport_backend: Default::default(),
     }
 }
 
@@ -378,7 +404,7 @@ async fn test_data_client_connect_disconnect() {
     set_data_event_sender(tx);
 
     let config = create_test_config(addr);
-    let mut client = BybitDataClient::new(ClientId::new("BYBIT"), config).unwrap();
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
     assert!(!client.is_connected());
 
     client.connect().await.unwrap();
@@ -403,7 +429,7 @@ async fn test_data_client_subscribe_trades() {
     set_data_event_sender(tx);
 
     let config = create_test_config(addr);
-    let mut client = BybitDataClient::new(ClientId::new("BYBIT"), config).unwrap();
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
     client.connect().await.unwrap();
 
     wait_until_async(
@@ -411,19 +437,20 @@ async fn test_data_client_subscribe_trades() {
         Duration::from_secs(5),
     )
     .await;
+
     while rx.try_recv().is_ok() {}
 
     let instrument_id = InstrumentId::from("BTCUSDT-LINEAR.BYBIT");
     let cmd = SubscribeTrades::new(
         instrument_id,
-        Some(ClientId::new("BYBIT")),
+        Some(*BYBIT_CLIENT_ID),
         None,
         UUID4::new(),
         UnixNanos::default(),
         None,
         None,
     );
-    client.subscribe_trades(&cmd).unwrap();
+    client.subscribe_trades(cmd).unwrap();
 
     wait_until_async(
         || async { !state.subscription_events.lock().await.is_empty() },
@@ -453,7 +480,7 @@ async fn test_data_client_subscribe_quotes_linear() {
     set_data_event_sender(tx);
 
     let config = create_test_config(addr);
-    let mut client = BybitDataClient::new(ClientId::new("BYBIT"), config).unwrap();
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
     client.connect().await.unwrap();
 
     wait_until_async(
@@ -468,14 +495,14 @@ async fn test_data_client_subscribe_quotes_linear() {
     let instrument_id = InstrumentId::from("BTCUSDT-LINEAR.BYBIT");
     let cmd = SubscribeQuotes::new(
         instrument_id,
-        Some(ClientId::new("BYBIT")),
+        Some(*BYBIT_CLIENT_ID),
         None,
         UUID4::new(),
         UnixNanos::default(),
         None,
         None,
     );
-    client.subscribe_quotes(&cmd).unwrap();
+    client.subscribe_quotes(cmd).unwrap();
 
     wait_until_async(
         || async {
@@ -512,7 +539,7 @@ async fn test_data_client_subscribe_book_deltas() {
     set_data_event_sender(tx);
 
     let config = create_test_config(addr);
-    let mut client = BybitDataClient::new(ClientId::new("BYBIT"), config).unwrap();
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
     client.connect().await.unwrap();
 
     wait_until_async(
@@ -527,7 +554,7 @@ async fn test_data_client_subscribe_book_deltas() {
     let cmd = SubscribeBookDeltas::new(
         instrument_id,
         BookType::L2_MBP,
-        Some(ClientId::new("BYBIT")),
+        Some(*BYBIT_CLIENT_ID),
         None,
         UUID4::new(),
         UnixNanos::default(),
@@ -536,7 +563,7 @@ async fn test_data_client_subscribe_book_deltas() {
         None,
         None,
     );
-    client.subscribe_book_deltas(&cmd).unwrap();
+    client.subscribe_book_deltas(cmd).unwrap();
 
     wait_until_async(
         || async {
@@ -573,7 +600,7 @@ async fn test_data_client_reset_clears_state() {
     set_data_event_sender(tx);
 
     let config = create_test_config(addr);
-    let mut client = BybitDataClient::new(ClientId::new("BYBIT"), config).unwrap();
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
 
     client.reset().unwrap();
     assert!(!client.is_connected());
@@ -594,7 +621,7 @@ async fn test_data_client_emits_instruments_on_connect() {
     set_data_event_sender(tx);
 
     let config = create_test_config(addr);
-    let mut client = BybitDataClient::new(ClientId::new("BYBIT"), config).unwrap();
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
 
     client.connect().await.unwrap();
 
@@ -618,6 +645,241 @@ async fn test_data_client_emits_instruments_on_connect() {
     assert!(
         instruments_received.load(Ordering::Relaxed) > 0,
         "Expected to receive instrument events on connect"
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_data_client_request_book_snapshot() {
+    let (addr, _state) = start_test_server().await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DataEvent>();
+    set_data_event_sender(tx);
+
+    let config = create_test_config(addr);
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
+    client.connect().await.unwrap();
+
+    // Drain instrument events from connect
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    while rx.try_recv().is_ok() {}
+
+    let instrument_id = InstrumentId::from("BTCUSDT-LINEAR.BYBIT");
+    let request = RequestBookSnapshot::new(
+        instrument_id,
+        None,
+        Some(*BYBIT_CLIENT_ID),
+        UUID4::new(),
+        UnixNanos::default(),
+        None,
+    );
+    client.request_book_snapshot(request).unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timeout waiting for book snapshot response")
+        .expect("channel closed");
+
+    assert!(
+        matches!(event, DataEvent::Response(DataResponse::Book(_))),
+        "Expected Book response, was: {event:?}"
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_data_client_request_funding_rates() {
+    let (addr, _state) = start_test_server().await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DataEvent>();
+    set_data_event_sender(tx);
+
+    let config = create_test_config(addr);
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
+    client.connect().await.unwrap();
+
+    // Drain instrument events from connect
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    while rx.try_recv().is_ok() {}
+
+    let instrument_id = InstrumentId::from("BTCUSDT-LINEAR.BYBIT");
+    let request = RequestFundingRates::new(
+        instrument_id,
+        None,
+        None,
+        None,
+        Some(*BYBIT_CLIENT_ID),
+        UUID4::new(),
+        UnixNanos::default(),
+        None,
+    );
+    client.request_funding_rates(request).unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timeout waiting for funding rates response")
+        .expect("channel closed");
+
+    assert!(
+        matches!(event, DataEvent::Response(DataResponse::FundingRates(_))),
+        "Expected FundingRates response, was: {event:?}"
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_data_client_request_funding_rates_rejects_spot() {
+    let (addr, _state) = start_test_server().await.unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<DataEvent>();
+    set_data_event_sender(tx);
+
+    let config = create_test_config(addr);
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
+    client.connect().await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let instrument_id = InstrumentId::from("BTCUSDT-SPOT.BYBIT");
+    let request = RequestFundingRates::new(
+        instrument_id,
+        None,
+        None,
+        None,
+        Some(*BYBIT_CLIENT_ID),
+        UUID4::new(),
+        UnixNanos::default(),
+        None,
+    );
+    let result = client.request_funding_rates(request);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Funding rates not available for Spot instruments"),
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_data_client_request_funding_rates_rejects_option() {
+    let (addr, _state) = start_test_server().await.unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<DataEvent>();
+    set_data_event_sender(tx);
+
+    let config = create_test_config(addr);
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
+    client.connect().await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let instrument_id = InstrumentId::from("BTC-26DEC25-100000-C-OPTION.BYBIT");
+    let request = RequestFundingRates::new(
+        instrument_id,
+        None,
+        None,
+        None,
+        Some(*BYBIT_CLIENT_ID),
+        UUID4::new(),
+        UnixNanos::default(),
+        None,
+    );
+    let result = client.request_funding_rates(request);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Funding rates not available for Option instruments"),
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_data_client_request_instruments() {
+    let (addr, _state) = start_test_server().await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DataEvent>();
+    set_data_event_sender(tx);
+
+    let config = create_test_config(addr);
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
+    client.connect().await.unwrap();
+
+    // Drain instrument events from connect
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    while rx.try_recv().is_ok() {}
+
+    let request = RequestInstruments::new(
+        None,
+        None,
+        Some(*BYBIT_CLIENT_ID),
+        Some(*BYBIT_VENUE),
+        UUID4::new(),
+        UnixNanos::default(),
+        None,
+    );
+    client.request_instruments(request).unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timeout waiting for instruments response")
+        .expect("channel closed");
+
+    assert!(
+        matches!(event, DataEvent::Response(DataResponse::Instruments(_))),
+        "Expected Instruments response, was: {event:?}"
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_data_client_request_instrument() {
+    let (addr, _state) = start_test_server().await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DataEvent>();
+    set_data_event_sender(tx);
+
+    let config = create_test_config(addr);
+    let mut client = BybitDataClient::new(*BYBIT_CLIENT_ID, config).unwrap();
+    client.connect().await.unwrap();
+
+    // Drain instrument events from connect
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    while rx.try_recv().is_ok() {}
+
+    let instrument_id = InstrumentId::from("BTCUSDT-LINEAR.BYBIT");
+    let request = RequestInstrument::new(
+        instrument_id,
+        None,
+        None,
+        Some(*BYBIT_CLIENT_ID),
+        UUID4::new(),
+        UnixNanos::default(),
+        None,
+    );
+    client.request_instrument(request).unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timeout waiting for instrument response")
+        .expect("channel closed");
+
+    assert!(
+        matches!(event, DataEvent::Response(DataResponse::Instrument(_))),
+        "Expected Instrument response, was: {event:?}"
     );
 
     client.disconnect().await.unwrap();

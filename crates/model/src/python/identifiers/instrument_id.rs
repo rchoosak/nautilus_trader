@@ -27,10 +27,17 @@ use pyo3::{
     types::{PyString, PyTuple},
 };
 
-use crate::identifiers::{InstrumentId, Symbol, Venue};
+use crate::{
+    enums::InstrumentClass,
+    identifiers::{InstrumentId, Symbol, Venue},
+};
 
 #[pymethods]
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
 impl InstrumentId {
+    /// Represents a valid instrument ID.
+    ///
+    /// The symbol and venue combination should uniquely identify the instrument.
     #[new]
     fn py_new(symbol: Symbol, venue: Venue) -> Self {
         Self::new(symbol, venue)
@@ -66,10 +73,11 @@ impl InstrumentId {
     }
 
     #[staticmethod]
-    fn _safe_constructor() -> PyResult<Self> {
-        Ok(Self::from_str("NULL.NULL").unwrap()) // Safe default
+    fn _safe_constructor() -> Self {
+        Self::from_str("NULL.NULL").unwrap() // Safe default
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     fn __richcmp__(&self, other: Py<PyAny>, op: CompareOp, py: Python<'_>) -> Py<PyAny> {
         if let Ok(other) = other.extract::<Self>(py) {
             match op {
@@ -125,5 +133,20 @@ impl InstrumentId {
     #[pyo3(name = "is_synthetic")]
     fn py_is_synthetic(&self) -> bool {
         self.is_synthetic()
+    }
+
+    /// Returns the parent-symbol components `(root, class)` if this id has
+    /// a recognised parent shape `<root>.<class>` in its symbol component.
+    ///
+    /// Returns `None` when the symbol has zero or more than one `.`, or when
+    /// the suffix is not a recognised `InstrumentClass` parent suffix
+    /// (see `InstrumentClass.try_from_parent_suffix`).
+    ///
+    /// Used to gate parent-style subscription fan-out: a `None` return means
+    /// the id does not refer to a parent group and must not be expanded.
+    #[pyo3(name = "parse_parent_components")]
+    fn py_parse_parent_components(&self) -> Option<(String, InstrumentClass)> {
+        self.parse_parent_components()
+            .map(|(root, class)| (root.to_string(), class))
     }
 }

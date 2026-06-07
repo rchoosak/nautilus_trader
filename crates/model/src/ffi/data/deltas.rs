@@ -23,8 +23,6 @@ use crate::{
 
 /// Creates a new [`OrderBookDeltas_API`] instance from a `CVec` of `OrderBookDelta`.
 ///
-/// # Safety
-///
 /// - The `deltas` must be a valid pointer to a `CVec` containing `OrderBookDelta` objects.
 /// - This function clones the data pointed to by `deltas` into Rust-managed memory, then forgets the original `Vec` to prevent Rust from auto-deallocating it.
 /// - The caller is responsible for managing the memory of `deltas` (including its deallocation) to avoid memory leaks.
@@ -37,7 +35,11 @@ pub extern "C" fn orderbook_deltas_new(
     let deltas: Vec<OrderBookDelta> =
         unsafe { Vec::from_raw_parts(ptr.cast::<OrderBookDelta>(), len, cap) };
     let cloned_deltas = deltas.clone();
-    std::mem::forget(deltas); // Prevents Rust from dropping `deltas`
+    #[allow(
+        clippy::mem_forget,
+        reason = "C ABI retains ownership of the original vector; clone is returned to Rust"
+    )]
+    std::mem::forget(deltas);
     OrderBookDeltas_API::new(OrderBookDeltas::new(instrument_id, cloned_deltas))
 }
 
@@ -97,7 +99,6 @@ pub extern "C" fn orderbook_deltas_ts_init(deltas: &OrderBookDeltas_API) -> Unix
 /// # Panics
 ///
 /// Panics if `CVec` invariants are violated (corrupted metadata).
-#[allow(clippy::drop_non_drop)]
 #[unsafe(no_mangle)]
 pub extern "C" fn orderbook_deltas_vec_drop(v: CVec) {
     let CVec { ptr, len, cap } = v;

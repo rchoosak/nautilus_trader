@@ -32,7 +32,10 @@ use ustr::Ustr;
 
 use super::timer::LiveTimer;
 use crate::{
-    clock::{CallbackRegistry, Clock, validate_and_prepare_time_alert, validate_and_prepare_timer},
+    clock::{
+        CallbackRegistry, Clock, replace_existing_timer, validate_and_prepare_time_alert,
+        validate_and_prepare_timer,
+    },
     runner::{TimeEventSender, try_get_time_event_sender},
     timer::{
         ScheduledTimeEvent, TimeEvent, TimeEventCallback, TimeEventHandler, create_valid_interval,
@@ -76,10 +79,7 @@ impl LiveClock {
     }
 
     fn replace_existing_timer_if_needed(&mut self, name: &Ustr) {
-        if self.timer_exists(name) {
-            self.cancel_timer(name.as_str());
-            log::warn!("Timer '{name}' replaced");
-        }
+        replace_existing_timer(&mut self.timers, name);
     }
 }
 
@@ -138,6 +138,14 @@ impl Clock for LiveClock {
 
     fn register_default_handler(&mut self, handler: TimeEventCallback) {
         self.callbacks.register_default_handler(handler);
+    }
+
+    fn cancel_default_handler(&mut self) {
+        self.callbacks.cancel_default_handler();
+    }
+
+    fn cancel_callbacks(&mut self) {
+        self.callbacks.clear();
     }
 
     /// # Panics
@@ -257,7 +265,7 @@ impl Clock for LiveClock {
     fn next_time_ns(&self, name: &str) -> Option<UnixNanos> {
         self.timers
             .get(&Ustr::from(name))
-            .map(|timer| timer.next_time_ns())
+            .map(LiveTimer::next_time_ns)
     }
 
     fn cancel_timer(&mut self, name: &str) {
@@ -394,8 +402,8 @@ mod tests {
 
         let snapshot = events.lock().expect(MUTEX_POISONED).clone();
         let diffs: Vec<u64> = snapshot
-            .windows(2)
-            .map(|pair| pair[1].0.ts_event.as_u64() - pair[0].0.ts_event.as_u64())
+            .array_windows()
+            .map(|[a, b]| b.0.ts_event.as_u64() - a.0.ts_event.as_u64())
             .collect();
 
         assert!(!diffs.is_empty());

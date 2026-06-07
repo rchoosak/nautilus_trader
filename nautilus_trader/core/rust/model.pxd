@@ -799,10 +799,10 @@ cdef extern from "../includes/model.h":
         # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
-    # A built-in Nautilus data type.
+    # A C-compatible representation of [`Data`] for FFI.
     #
-    # Not recommended for storing large amounts of data, as the largest variant is significantly
-    # larger (10x) than the smallest.
+    # This enum matches the standard variants of [`Data`] but excludes the `Custom`
+    # variant which is not FFI-safe.
     cpdef enum Data_t_Tag:
         DELTA,
         DELTAS,
@@ -925,7 +925,7 @@ cdef extern from "../includes/model.h":
 
     # Represents an event where an order has been accepted by the trading venue.
     #
-    # This event often corresponds to a `NEW` OrdStatus <39> field in FIX execution reports.
+    # This event often corresponds to a `NEW` `OrdStatus` <39> field in FIX execution reports.
     cdef struct OrderAccepted_t:
         # The trader ID associated with the event.
         TraderId_t trader_id;
@@ -1083,9 +1083,9 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # This value is computed at compile time from MONEY_MAX * FIXED_SCALAR.
-    # The multiplication is guaranteed not to overflow because MONEY_MAX and FIXED_SCALAR
-    # are chosen such that their product fits within MoneyRaw's range in both
+    # This value is computed at compile time from `MONEY_MAX` * `FIXED_SCALAR`.
+    # The multiplication is guaranteed not to overflow because `MONEY_MAX` and `FIXED_SCALAR`
+    # are chosen such that their product fits within `MoneyRaw`'s range in both
     # high-precision (i128) and standard-precision (i64) modes.
     extern const MoneyRaw MONEY_RAW_MAX;
 
@@ -1093,9 +1093,9 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # This value is computed at compile time from MONEY_MIN * FIXED_SCALAR.
-    # The multiplication is guaranteed not to overflow because MONEY_MIN and FIXED_SCALAR
-    # are chosen such that their product fits within MoneyRaw's range in both
+    # This value is computed at compile time from `MONEY_MIN` * `FIXED_SCALAR`.
+    # The multiplication is guaranteed not to overflow because `MONEY_MIN` and `FIXED_SCALAR`
+    # are chosen such that their product fits within `MoneyRaw`'s range in both
     # high-precision (i128) and standard-precision (i64) modes.
     extern const MoneyRaw MONEY_RAW_MIN;
 
@@ -1103,9 +1103,9 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # This value is computed at compile time from PRICE_MAX * FIXED_SCALAR.
-    # The multiplication is guaranteed not to overflow because PRICE_MAX and FIXED_SCALAR
-    # are chosen such that their product fits within PriceRaw's range in both
+    # This value is computed at compile time from `PRICE_MAX` * `FIXED_SCALAR`.
+    # The multiplication is guaranteed not to overflow because `PRICE_MAX` and `FIXED_SCALAR`
+    # are chosen such that their product fits within `PriceRaw`'s range in both
     # high-precision (i128) and standard-precision (i64) modes.
     extern const PriceRaw PRICE_RAW_MAX;
 
@@ -1113,9 +1113,9 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # This value is computed at compile time from PRICE_MIN * FIXED_SCALAR.
-    # The multiplication is guaranteed not to overflow because PRICE_MIN and FIXED_SCALAR
-    # are chosen such that their product fits within PriceRaw's range in both
+    # This value is computed at compile time from `PRICE_MIN` * `FIXED_SCALAR`.
+    # The multiplication is guaranteed not to overflow because `PRICE_MIN` and `FIXED_SCALAR`
+    # are chosen such that their product fits within `PriceRaw`'s range in both
     # high-precision (i128) and standard-precision (i64) modes.
     extern const PriceRaw PRICE_RAW_MIN;
 
@@ -1233,8 +1233,6 @@ cdef extern from "../includes/model.h":
     uint64_t orderbook_delta_hash(const OrderBookDelta_t *delta);
 
     # Creates a new [`OrderBookDeltas_API`] instance from a `CVec` of `OrderBookDelta`.
-    #
-    # # Safety
     #
     # - The `deltas` must be a valid pointer to a `CVec` containing `OrderBookDelta` objects.
     # - This function clones the data pointed to by `deltas` into Rust-managed memory, then forgets the original `Vec` to prevent Rust from auto-deallocating it.
@@ -2102,6 +2100,10 @@ cdef extern from "../includes/model.h":
     CVec orderbook_bids(OrderBook_API *book);
 
     CVec orderbook_asks(OrderBook_API *book);
+
+    CVec orderbook_bids_down_to(OrderBook_API *book, PriceRaw price_raw, uint8_t price_prec);
+
+    CVec orderbook_asks_up_to(OrderBook_API *book, PriceRaw price_raw, uint8_t price_prec);
 
     uint8_t orderbook_has_bid(OrderBook_API *book);
 

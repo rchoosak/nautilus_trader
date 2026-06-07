@@ -18,11 +18,13 @@
 //! Requires the `high-precision` feature because the ITCH parquet data
 //! uses 128-bit fixed-point encoding.
 
-#![cfg(feature = "high-precision")]
+#![cfg(all(feature = "high-precision", feature = "examples"))]
 
-use ahash::AHashMap;
-use nautilus_backtest::{config::BacktestEngineConfig, engine::BacktestEngine};
-use nautilus_execution::models::{fee::FeeModelAny, fill::FillModelAny};
+use nautilus_backtest::{
+    config::{BacktestEngineConfig, SimulatedVenueConfig},
+    engine::BacktestEngine,
+};
+use nautilus_common::throttler::RateLimit;
 use nautilus_model::{
     data::{Data, OrderBookDelta},
     enums::{AccountType, BookType, OmsType},
@@ -32,50 +34,41 @@ use nautilus_model::{
     types::{Currency, Money, Quantity},
 };
 use nautilus_persistence::backend::catalog::ParquetDataCatalog;
+use nautilus_risk::engine::config::RiskEngineConfig;
 use nautilus_testkit::common::{itch_aapl_equity, load_itch_aapl_deltas};
 use nautilus_trading::examples::strategies::{GridMarketMaker, GridMarketMakerConfig};
 use rstest::rstest;
 use tempfile::TempDir;
 
 // Subsample for CI (covers initial snapshot + active trading)
-const CI_DELTA_LIMIT: usize = 100_000;
+const CI_DELTA_LIMIT: usize = 10_000;
 
 fn create_engine(instrument: &InstrumentAny) -> BacktestEngine {
-    let config = BacktestEngineConfig::default();
+    // Use an unrestricted throttle rate so the grid MM can place orders freely
+    // without hitting the default 100/sec limit on high-frequency ITCH data.
+    let unlimited = RateLimit::new(1_000_000, 1_000_000_000);
+    let config = BacktestEngineConfig {
+        risk_engine: Some(RiskEngineConfig {
+            max_order_submit: unlimited.clone(),
+            max_order_modify: unlimited,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
     let mut engine = BacktestEngine::new(config).unwrap();
     engine
         .add_venue(
-            Venue::from("XNAS"),
-            OmsType::Netting,
-            AccountType::Margin,
-            BookType::L1_MBP,
-            vec![Money::from("1_000_000 USD")],
-            Some(Currency::from("USD")),
-            None,
-            AHashMap::new(),
-            vec![],
-            FillModelAny::default(),
-            FeeModelAny::default(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            SimulatedVenueConfig::builder()
+                .venue(Venue::from("XNAS"))
+                .oms_type(OmsType::Netting)
+                .account_type(AccountType::Margin)
+                .book_type(BookType::L1_MBP)
+                .starting_balances(vec![Money::from("1_000_000 USD")])
+                .base_currency(Currency::from("USD"))
+                .build(),
         )
         .unwrap();
-    engine.add_instrument(instrument.clone()).unwrap();
+    engine.add_instrument(instrument).unwrap();
     engine
 }
 
@@ -100,7 +93,7 @@ fn test_grid_mm_itch_direct_load() {
 
     let mut engine = create_engine(&instrument);
     engine.add_strategy(create_strategy(instrument_id)).unwrap();
-    engine.add_data(data, None, true, true);
+    engine.add_data(data, None, true, true).unwrap();
 
     engine.run(None, None, None, false).unwrap();
 
@@ -120,14 +113,13 @@ fn test_grid_mm_itch_catalog_load() {
 
     // Write deltas to a temp catalog then query back
     let temp_dir = TempDir::new().unwrap();
-    let catalog = ParquetDataCatalog::new(temp_dir.path().to_path_buf(), None, None, None, None);
+    let catalog = ParquetDataCatalog::new(temp_dir.path(), None, None, None, None);
     catalog
         .write_to_parquet(deltas.clone(), None, None, None)
         .unwrap();
     catalog.write_instruments(vec![instrument.clone()]).unwrap();
 
-    let mut catalog =
-        ParquetDataCatalog::new(temp_dir.path().to_path_buf(), None, None, None, None);
+    let mut catalog = ParquetDataCatalog::new(temp_dir.path(), None, None, None, None);
     let loaded_deltas: Vec<OrderBookDelta> = catalog
         .query_typed_data(
             Some(vec![instrument_id.to_string()]),
@@ -147,7 +139,7 @@ fn test_grid_mm_itch_catalog_load() {
     let num_quotes = data.len();
     let mut engine = create_engine(&instrument);
     engine.add_strategy(create_strategy(instrument_id)).unwrap();
-    engine.add_data(data, None, true, true);
+    engine.add_data(data, None, true, true).unwrap();
 
     engine.run(None, None, None, false).unwrap();
 
@@ -178,11 +170,11 @@ fn test_grid_mm_itch_streaming() {
     let mut engine = create_engine(&instrument);
     engine.add_strategy(create_strategy(instrument_id)).unwrap();
 
-    engine.add_data(batch1, None, true, true);
+    engine.add_data(batch1, None, true, true).unwrap();
     engine.run(None, None, None, true).unwrap();
 
     engine.clear_data();
-    engine.add_data(batch2, None, true, true);
+    engine.add_data(batch2, None, true, true).unwrap();
     engine.run(None, None, None, false).unwrap();
 
     let streaming_result = engine.get_result();

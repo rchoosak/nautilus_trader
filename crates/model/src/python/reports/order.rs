@@ -36,9 +36,11 @@ use crate::{
 };
 
 #[pymethods]
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
 impl OrderStatusReport {
+    /// Represents an order status at a point in time.
     #[new]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[pyo3(signature = (
         account_id,
         instrument_id,
@@ -106,7 +108,7 @@ impl OrderStatusReport {
         reduce_only: bool,
         cancel_reason: Option<String>,
         ts_triggered: Option<u64>,
-    ) -> PyResult<Self> {
+    ) -> Self {
         let mut report = Self::new(
             account_id,
             instrument_id,
@@ -127,59 +129,76 @@ impl OrderStatusReport {
         if let Some(order_list_id) = order_list_id {
             report = report.with_order_list_id(order_list_id);
         }
+
         if let Some(venue_position_id) = venue_position_id {
             report = report.with_venue_position_id(venue_position_id);
         }
+
         if let Some(linked_order_ids) = linked_order_ids {
             report = report.with_linked_order_ids(linked_order_ids);
         }
+
         if let Some(parent_order_id) = parent_order_id {
             report = report.with_parent_order_id(parent_order_id);
         }
+
         if let Some(contingency_type) = contingency_type {
             report = report.with_contingency_type(contingency_type);
         }
+
         if let Some(expire_time) = expire_time {
             report = report.with_expire_time(expire_time.into());
         }
+
         if let Some(price) = price {
             report = report.with_price(price);
         }
+
         if let Some(trigger_price) = trigger_price {
             report = report.with_trigger_price(trigger_price);
         }
+
         if let Some(trigger_type) = trigger_type {
             report = report.with_trigger_type(trigger_type);
         }
+
         if let Some(limit_offset) = limit_offset {
             report = report.with_limit_offset(limit_offset);
         }
+
         if let Some(trailing_offset) = trailing_offset {
             report = report.with_trailing_offset(trailing_offset);
         }
+
         if let Some(trailing_offset_type) = trailing_offset_type {
             report = report.with_trailing_offset_type(trailing_offset_type);
         }
+
         if let Some(avg_px) = avg_px {
             report.avg_px = Some(avg_px);
         }
+
         if let Some(display_qty) = display_qty {
             report = report.with_display_qty(display_qty);
         }
+
         if post_only {
             report = report.with_post_only(post_only);
         }
+
         if reduce_only {
             report = report.with_reduce_only(reduce_only);
         }
+
         if let Some(cancel_reason) = cancel_reason {
             report = report.with_cancel_reason(cancel_reason);
         }
+
         if let Some(ts_triggered) = ts_triggered {
             report = report.with_ts_triggered(ts_triggered.into());
         }
 
-        Ok(report)
+        report
     }
 
     fn __richcmp__(&self, other: &Self, op: CompareOp, py: Python<'_>) -> Py<PyAny> {
@@ -448,14 +467,17 @@ impl OrderStatusReport {
             Some(id) => dict.set_item("client_order_id", id.to_string())?,
             None => dict.set_item("client_order_id", py.None())?,
         }
+
         match &self.order_list_id {
             Some(id) => dict.set_item("order_list_id", id.to_string())?,
             None => dict.set_item("order_list_id", py.None())?,
         }
+
         match &self.venue_position_id {
             Some(id) => dict.set_item("venue_position_id", id.to_string())?,
             None => dict.set_item("venue_position_id", py.None())?,
         }
+
         match &self.linked_order_ids {
             Some(ids) => {
                 let py_list = PyList::new(py, ids.iter().map(|id| id.to_string()))?;
@@ -463,46 +485,57 @@ impl OrderStatusReport {
             }
             None => dict.set_item("linked_order_ids", py.None())?,
         }
+
         match &self.parent_order_id {
             Some(id) => dict.set_item("parent_order_id", id.to_string())?,
             None => dict.set_item("parent_order_id", py.None())?,
         }
+
         match &self.expire_time {
             Some(t) => dict.set_item("expire_time", t.as_u64())?,
             None => dict.set_item("expire_time", py.None())?,
         }
+
         match &self.price {
             Some(p) => dict.set_item("price", p.to_string())?,
             None => dict.set_item("price", py.None())?,
         }
+
         match &self.trigger_price {
             Some(p) => dict.set_item("trigger_price", p.to_string())?,
             None => dict.set_item("trigger_price", py.None())?,
         }
+
         match &self.trigger_type {
             Some(t) => dict.set_item("trigger_type", t.to_string())?,
             None => dict.set_item("trigger_type", py.None())?,
         }
+
         match &self.limit_offset {
             Some(o) => dict.set_item("limit_offset", o.to_string())?,
             None => dict.set_item("limit_offset", py.None())?,
         }
+
         match &self.trailing_offset {
             Some(o) => dict.set_item("trailing_offset", o.to_string())?,
             None => dict.set_item("trailing_offset", py.None())?,
         }
+
         match &self.avg_px {
             Some(p) => dict.set_item("avg_px", p)?,
             None => dict.set_item("avg_px", py.None())?,
         }
+
         match &self.display_qty {
             Some(q) => dict.set_item("display_qty", q.to_string())?,
             None => dict.set_item("display_qty", py.None())?,
         }
+
         match &self.cancel_reason {
             Some(r) => dict.set_item("cancel_reason", r)?,
             None => dict.set_item("cancel_reason", py.None())?,
         }
+
         match &self.ts_triggered {
             Some(t) => dict.set_item("ts_triggered", t.as_u64())?,
             None => dict.set_item("ts_triggered", py.None())?,

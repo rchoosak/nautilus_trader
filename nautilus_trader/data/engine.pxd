@@ -16,7 +16,7 @@
 from cpython.datetime cimport datetime
 from libc.stdint cimport uint64_t
 
-from nautilus_trader.persistence.catalog import ParquetDataCatalog
+from nautilus_trader.persistence.catalog import BaseDataCatalog
 
 from nautilus_trader.cache.cache cimport Cache
 from nautilus_trader.common.component cimport Component
@@ -24,6 +24,7 @@ from nautilus_trader.common.component cimport TimeEvent
 from nautilus_trader.common.data_topics cimport TopicCache
 from nautilus_trader.core.data cimport Data
 from nautilus_trader.core.rust.model cimport BookType
+from nautilus_trader.core.rust.model cimport MarketStatusAction
 from nautilus_trader.core.uuid cimport UUID4
 from nautilus_trader.data.aggregation cimport BarAggregator
 from nautilus_trader.data.aggregation cimport SpreadQuoteAggregator
@@ -33,6 +34,7 @@ from nautilus_trader.data.messages cimport DataCommand
 from nautilus_trader.data.messages cimport DataResponse
 from nautilus_trader.data.messages cimport RequestBars
 from nautilus_trader.data.messages cimport RequestData
+from nautilus_trader.data.messages cimport RequestForwardPrices
 from nautilus_trader.data.messages cimport RequestFundingRates
 from nautilus_trader.data.messages cimport RequestInstrument
 from nautilus_trader.data.messages cimport RequestInstruments
@@ -51,6 +53,8 @@ from nautilus_trader.data.messages cimport SubscribeInstrumentClose
 from nautilus_trader.data.messages cimport SubscribeInstruments
 from nautilus_trader.data.messages cimport SubscribeInstrumentStatus
 from nautilus_trader.data.messages cimport SubscribeMarkPrices
+from nautilus_trader.data.messages cimport SubscribeOptionChain
+from nautilus_trader.data.messages cimport SubscribeOptionGreeks
 from nautilus_trader.data.messages cimport SubscribeOrderBook
 from nautilus_trader.data.messages cimport SubscribeQuoteTicks
 from nautilus_trader.data.messages cimport SubscribeTradeTicks
@@ -63,6 +67,8 @@ from nautilus_trader.data.messages cimport UnsubscribeInstrumentClose
 from nautilus_trader.data.messages cimport UnsubscribeInstruments
 from nautilus_trader.data.messages cimport UnsubscribeInstrumentStatus
 from nautilus_trader.data.messages cimport UnsubscribeMarkPrices
+from nautilus_trader.data.messages cimport UnsubscribeOptionChain
+from nautilus_trader.data.messages cimport UnsubscribeOptionGreeks
 from nautilus_trader.data.messages cimport UnsubscribeOrderBook
 from nautilus_trader.data.messages cimport UnsubscribeQuoteTicks
 from nautilus_trader.data.messages cimport UnsubscribeTradeTicks
@@ -75,6 +81,7 @@ from nautilus_trader.model.data cimport IndexPriceUpdate
 from nautilus_trader.model.data cimport InstrumentClose
 from nautilus_trader.model.data cimport InstrumentStatus
 from nautilus_trader.model.data cimport MarkPriceUpdate
+from nautilus_trader.model.data cimport OptionGreeks
 from nautilus_trader.model.data cimport OrderBookDelta
 from nautilus_trader.model.data cimport OrderBookDeltas
 from nautilus_trader.model.data cimport OrderBookDepth10
@@ -91,7 +98,7 @@ cdef class DataEngine(Component):
     cdef readonly Cache _cache
     cdef readonly DataClient _default_client
     cdef readonly set[ClientId] _external_clients
-    cdef readonly dict[str, ParquetDataCatalog] _catalogs
+    cdef readonly dict[str, BaseDataCatalog] _catalogs
 
     cdef readonly dict[ClientId, DataClient] _clients
     cdef readonly dict[Venue, DataClient] _routing_map
@@ -106,17 +113,24 @@ cdef class DataEngine(Component):
     cdef readonly dict[InstrumentId, list[OrderBookDelta]] _buffered_deltas_map
     cdef readonly dict[str, SnapshotInfo] _snapshot_info
 
+    cdef readonly dict _option_chain_managers
+    cdef readonly dict _option_chain_instrument_index
+    cdef readonly dict _option_chain_timer_names
+    cdef readonly dict _pending_option_chain_requests
+
     cdef readonly dict[UUID4, RequestData] _request_group_parent_request
     cdef readonly dict[UUID4, int] _request_group_n_components
     cdef readonly dict[UUID4, UUID4] _request_group_parent_request_id
     cdef readonly dict[UUID4, list] _request_group_responses
     cdef readonly dict[UUID4, object] _long_request_generator
     cdef readonly dict[UUID4, RequestData] _requests
+    cdef readonly dict[UUID4, object] _request_workflows
     cdef readonly dict[UUID4, UUID4] _parent_long_request_id
     cdef readonly dict[UUID4, UUID4] _parent_join_request_id
     cdef readonly dict[UUID4, UUID4] _parent_request_id
     cdef readonly bint _disable_historical_cache
     cdef readonly dict[UUID4, dict[str, Any]] _bar_types_params
+    cdef readonly dict[BarType, object] _continuous_future_subscriptions
 
     cdef TopicCache _topic_cache
 
@@ -173,6 +187,7 @@ cdef class DataEngine(Component):
     cpdef list subscribed_bars(self)
     cpdef list subscribed_instrument_status(self)
     cpdef list subscribed_instrument_close(self)
+    cpdef list subscribed_option_greeks(self)
     cpdef list subscribed_synthetic_quotes(self)
     cpdef list subscribed_synthetic_trades(self)
 
@@ -203,9 +218,12 @@ cdef class DataEngine(Component):
     cpdef void _handle_subscribe_funding_rates(self, MarketDataClient client, SubscribeFundingRates command)
     cpdef void _handle_subscribe_synthetic_trade_ticks(self, InstrumentId instrument_id)
     cpdef void _handle_subscribe_bars(self, MarketDataClient client, SubscribeBars command)
+    cpdef void _handle_subscribe_continuous_future_bars(self, MarketDataClient client, SubscribeBars command)
     cpdef void _handle_subscribe_data(self, DataClient client, SubscribeData command)
     cpdef void _handle_subscribe_instrument_status(self, MarketDataClient client, SubscribeInstrumentStatus command)
     cpdef void _handle_subscribe_instrument_close(self, MarketDataClient client, SubscribeInstrumentClose command)
+    cpdef void _handle_subscribe_option_greeks(self, MarketDataClient client, SubscribeOptionGreeks command)
+    cpdef void _handle_subscribe_option_chain(self, MarketDataClient client, SubscribeOptionChain command)
     cpdef void _handle_unsubscribe_instruments(self, MarketDataClient client, UnsubscribeInstruments command)
     cpdef void _handle_unsubscribe_instrument(self, MarketDataClient client, UnsubscribeInstrument command)
     cpdef void _handle_unsubscribe_order_book(self, MarketDataClient client, UnsubscribeOrderBook command)
@@ -215,9 +233,26 @@ cdef class DataEngine(Component):
     cpdef void _handle_unsubscribe_index_prices(self, MarketDataClient client, UnsubscribeIndexPrices command)
     cpdef void _handle_unsubscribe_funding_rates(self, MarketDataClient client, UnsubscribeFundingRates command)
     cpdef void _handle_unsubscribe_bars(self, MarketDataClient client, UnsubscribeBars command)
+    cpdef void _handle_unsubscribe_continuous_future_bars(self, MarketDataClient client, UnsubscribeBars command)
     cpdef void _handle_unsubscribe_data(self, DataClient client, UnsubscribeData command)
     cpdef void _handle_unsubscribe_instrument_status(self, MarketDataClient client, UnsubscribeInstrumentStatus command)
     cpdef void _handle_unsubscribe_instrument_close(self, MarketDataClient client, UnsubscribeInstrumentClose command)
+    cpdef void _handle_unsubscribe_option_greeks(self, MarketDataClient client, UnsubscribeOptionGreeks command)
+    cpdef void _handle_unsubscribe_option_chain(self, MarketDataClient client, UnsubscribeOptionChain command)
+
+# -- OPTION CHAIN HELPERS -------------------------------------------------------------------------
+
+    cdef void _subscribe_option_chain_instruments(self, MarketDataClient client, list active_ids, SubscribeOptionChain command)
+    cdef void _unsubscribe_option_chain_instruments(self, MarketDataClient client, list instrument_ids)
+    cdef void _create_option_chain_manager(self, SubscribeOptionChain command, object initial_atm_price)
+    cdef void _handle_forward_prices_response(self, object correlation_id, list forward_prices)
+    cdef object _find_sample_instrument(self, object series_id)
+    cdef void _complete_option_chain_bootstrap(self, str series_key, object manager)
+    cdef void _teardown_option_chain(self, str series_key, MarketDataClient client)
+    cdef void _expire_option_chain_instrument(self, InstrumentId instrument_id, str series_key)
+    cdef void _update_option_chains(self, Instrument instrument)
+    cdef void _feed_quote_to_option_chain(self, QuoteTick tick)
+    cdef void _feed_greeks_to_option_chain(self, OptionGreeks option_greeks)
 
 # -- REQUEST HANDLERS -----------------------------------------------------------------------------
 
@@ -229,7 +264,7 @@ cdef class DataEngine(Component):
     cpdef void _handle_request_order_book_deltas(self, DataClient client, RequestOrderBookDeltas request)
     cpdef void _handle_request_order_book_depth(self, DataClient client, RequestOrderBookDepth request)
     cpdef void _handle_request_order_book_snapshot(self, DataClient client, RequestOrderBookSnapshot request)
-    cpdef void _handle_order_book_deltas_snapshot_replay(self, DataResponse response)
+    cpdef list _handle_order_book_deltas_snapshot_replay(self, UUID4 correlation_id, list data, dict params)
     cpdef tuple _bound_dates(self, RequestData request)
     cpdef void _date_range_client_request(self, DataClient client, RequestData request)
     cpdef void _handle_date_range_request(self, DataClient client, RequestData request)
@@ -262,6 +297,7 @@ cdef class DataEngine(Component):
     cpdef void _handle_custom_data(self, CustomData data, bint historical = *)
     cpdef void _handle_instrument_status(self, InstrumentStatus data, bint historical = *)
     cpdef void _handle_close_price(self, InstrumentClose data, bint historical = *)
+    cpdef void _handle_option_greeks(self, OptionGreeks option_greeks)
 
 # -- RESPONSE HANDLERS ----------------------------------------------------------------------------
 
@@ -288,17 +324,56 @@ cdef class DataEngine(Component):
 
     cdef tuple _get_bar_aggregator_key(self, BarType bar_type, UUID4 request_id = *)
     cdef tuple _get_spread_quote_aggregator_key(self, InstrumentId spread_instrument_id, UUID4 request_id = *)
+    cdef object _ensure_request_workflows(self, RequestData request)
+    cdef object _inherit_request_workflows(self, RequestData target, RequestData source)
+    cdef dict _request_response_params(self, UUID4 request_id, dict fallback_params = *)
+    cdef void _abort_request(self, UUID4 request_id)
+    cdef void _cleanup_request_group(self, UUID4 parent_request_id)
+    cdef bint _cleanup_request_bar_aggregators(self, UUID4 request_id)
+    cdef void _complete_grouped_request_or_abort(self, RequestData request)
+    cdef void _emit_empty_request_response(self, UUID4 parent_request_id)
     cdef list _get_bar_types_from_aggregators(self)
     cpdef void _init_historical_aggregators(self, RequestData request)
+    cdef void _init_bar_aggregators_for_request(self, tuple bar_types, dict params, UUID4 request_id = *, bint historical = *, bint disable_time_bars_build_with_no_updates = *)
     cpdef void _start_bar_aggregator(self, MarketDataClient client, SubscribeBars command)
     cpdef void _create_bar_aggregator(self, BarType bar_type, dict params, UUID4 request_id = *)
-    cpdef void _setup_bar_aggregator(self, BarType bar_type, bint historical = *, UUID4 request_id = *)
+    cpdef void _setup_bar_aggregator(self, BarType bar_type, bint historical = *, UUID4 request_id = *, bint subscribe_source = *)
     cpdef void _subscribe_bar_aggregator(self, MarketDataClient client, SubscribeBars command)
     cpdef void _finalize_aggregated_bars_request(self, DataResponse response)
     cpdef void _stop_bar_aggregator(self, MarketDataClient client, UnsubscribeBars command)
     cpdef void _dispose_bar_aggregator(self, BarType bar_type, bint historical = *, UUID4 request_id = *)
     cpdef void _unsubscribe_bar_aggregator(self, MarketDataClient client, UnsubscribeBars command)
     cpdef bint _should_request_aggregated_bars(self, RequestData request)
+
+# -- INTERNAL - Continuous Futures ---------------------------------------------------------------
+
+    # (1) Subscribe / Unsubscribe (entry points `_handle_{subscribe,unsubscribe}_continuous_future_bars`
+    # are declared with the other subscribe/unsubscribe handlers above.)
+    cdef void _continuous_future_activate_segment(self, BarType target_bar_type, InstrumentId segment_instrument_id, int segment_index, object transitions, dict params, ClientId client_id, Venue venue, UUID4 correlation_id, uint64_t ts_init)
+    cdef void _continuous_future_schedule_next_transition(self, BarType target_key)
+    cpdef void _handle_continuous_future_subscription_transition(self, TimeEvent event)
+    cdef void _continuous_future_deactivate_segment(self, BarType target_bar_type, InstrumentId segment_instrument_id, dict params, ClientId client_id, Venue venue, UUID4 correlation_id, uint64_t ts_init)
+    cdef object _continuous_future_build_subscribe_command(self, tuple source, ClientId client_id, Venue venue, dict parent_params, UUID4 correlation_id, InstrumentId segment_instrument_id, uint64_t ts_init, bint subscribe)
+
+    # (2) Request
+    cpdef void _handle_continuous_future_request(self, RequestData request)
+    cdef void _setup_continuous_future_aggregators(self, RequestData request, tuple bar_types)
+    cpdef void _update_continuous_future_data(self, UUID4 parent_id)
+    cdef RequestData _continuous_future_build_child_request(self, RequestData parent, tuple source, InstrumentId segment_instrument_id, uint64_t start_ns, uint64_t end_ns)
+    cpdef void _handle_continuous_future_response(self, DataResponse response)
+
+    # (3) Shared helpers
+    cdef void _continuous_future_ensure_target_instrument(self, BarType target_bar_type, object transitions)
+    cdef bint _continuous_future_validate_transitions(self, BarType target_bar_type, object transitions, dict params)
+    cdef tuple _continuous_future_next_segment(self, object transitions, uint64_t cursor_ns, uint64_t end_ns)
+    cdef void _continuous_future_apply_adjustment(self, BarAggregator aggregator, object transitions, int segment_index, dict params)
+    cdef object _continuous_future_compute_offset(self, object transitions, int segment_index, dict params)
+    cdef tuple _continuous_future_resolve_source(self, BarType target_bar_type, InstrumentId segment_instrument_id)
+    cdef dict _continuous_future_child_params(self, dict parent_params)
+    cdef void _continuous_future_subscribe_source(self, BarAggregator aggregator, tuple source, InstrumentId segment_instrument_id, bint historical = *)
+    cdef void _continuous_future_unsubscribe_source(self, BarAggregator aggregator, tuple source, InstrumentId segment_instrument_id, bint historical = *)
+    cdef str _continuous_future_source_topic(self, tuple source, InstrumentId segment_instrument_id, bint historical = *)
+    cdef object _continuous_future_source_handler(self, BarAggregator aggregator, str source_type)
 
 # -- INTERNAL - Spread Quote Aggregators ----------------------------------------------------------
 

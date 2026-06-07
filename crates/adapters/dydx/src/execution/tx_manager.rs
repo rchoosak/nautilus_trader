@@ -227,6 +227,7 @@ impl TransactionManager {
         );
 
         let mut matching_ids = Vec::new();
+
         for auth in &authenticators {
             if Self::authenticator_matches_pubkey(auth, &signing_pubkey_b64) {
                 matching_ids.push(auth.id);
@@ -297,6 +298,7 @@ impl TransactionManager {
                         sub.auth_type,
                         sub.config
                     );
+
                     if sub.auth_type == "SignatureVerification" && sub.config == pubkey_b64 {
                         log::debug!("  -> MATCH! pubkey_b64={pubkey_b64}");
                         return true;
@@ -375,6 +377,7 @@ impl TransactionManager {
                 continue;
             }
             let new_value = current + count as u64;
+
             if self
                 .sequence_number
                 .compare_exchange(current, new_value, Ordering::SeqCst, Ordering::SeqCst)

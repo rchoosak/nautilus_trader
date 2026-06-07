@@ -38,10 +38,13 @@ use nautilus_binance::{
     spot::{
         enums::BinanceSpotOrderType,
         http::query::NewOrderParams,
-        websocket::trading::{client::BinanceSpotWsTradingClient, messages::NautilusWsApiMessage},
+        websocket::trading::{
+            client::BinanceSpotWsTradingClient, messages::BinanceSpotWsTradingMessage,
+        },
     },
 };
 use nautilus_common::testing::wait_until_async;
+use nautilus_network::websocket::TransportBackend;
 use rstest::rstest;
 use serde_json::json;
 
@@ -276,6 +279,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                                 "code": -2010,
                                 "msg": "Order rejected: insufficient balance"
                             });
+
                             if socket
                                 .send(Message::Text(error_response.to_string().into()))
                                 .await
@@ -313,6 +317,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
                             "code": -2011,
                             "msg": "Order does not exist"
                         });
+
                         if socket
                             .send(Message::Text(error_response.to_string().into()))
                             .await
@@ -326,6 +331,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
             }
             Message::Ping(_) => {
                 state.ping_count.fetch_add(1, Ordering::Relaxed);
+
                 if socket.send(Message::Pong(vec![].into())).await.is_err() {
                     break;
                 }
@@ -375,6 +381,7 @@ fn create_test_client(addr: &SocketAddr) -> BinanceSpotWsTradingClient {
         "test_api_key".to_string(),
         "test_api_secret".to_string(),
         None,
+        TransportBackend::default(),
     )
 }
 
@@ -532,11 +539,11 @@ async fn test_order_rejection_via_json_error() {
     // Receive the rejection message
     if let Some(msg) = client.recv().await {
         match msg {
-            NautilusWsApiMessage::Connected => {
+            BinanceSpotWsTradingMessage::Connected => {
                 // First message is Connected, get the next one
                 if let Some(rejection) = client.recv().await {
                     match rejection {
-                        NautilusWsApiMessage::OrderRejected { code, msg, .. } => {
+                        BinanceSpotWsTradingMessage::OrderRejected { code, msg, .. } => {
                             assert_eq!(code, -2010);
                             assert!(msg.contains("insufficient balance"));
                         }
@@ -544,7 +551,7 @@ async fn test_order_rejection_via_json_error() {
                     }
                 }
             }
-            NautilusWsApiMessage::OrderRejected { code, msg, .. } => {
+            BinanceSpotWsTradingMessage::OrderRejected { code, msg, .. } => {
                 assert_eq!(code, -2010);
                 assert!(msg.contains("insufficient balance"));
             }
@@ -641,6 +648,7 @@ async fn test_connection_failure_invalid_url() {
         "test_api_key".to_string(),
         "test_api_secret".to_string(),
         None,
+        TransportBackend::default(),
     );
 
     // Connection should fail

@@ -40,11 +40,14 @@ use std::{collections::HashMap, env};
 
 use chrono::{Duration, Utc};
 use nautilus_dydx::{
-    common::{consts::DYDX_TESTNET_HTTP_URL, enums::DydxCandleResolution},
+    common::{
+        consts::{DYDX_TESTNET_HTTP_URL, DYDX_VENUE},
+        enums::{DydxCandleResolution, DydxNetwork},
+    },
     http::client::DydxHttpClient,
 };
 use nautilus_model::{
-    identifiers::{InstrumentId, Symbol, Venue},
+    identifiers::{InstrumentId, Symbol},
     instruments::{Instrument, InstrumentAny},
 };
 
@@ -66,16 +69,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         env::var("DYDX_HTTP_URL").unwrap_or_else(|_| DYDX_TESTNET_HTTP_URL.to_string())
     };
-    let is_testnet = !is_mainnet;
+    let network = if is_mainnet {
+        DydxNetwork::Mainnet
+    } else {
+        DydxNetwork::Testnet
+    };
 
     log::info!("Connecting to dYdX HTTP API: {base_url}");
-    log::info!(
-        "Environment: {}",
-        if is_testnet { "TESTNET" } else { "MAINNET" }
-    );
+    log::info!("Environment: {network}");
     log::info!("");
 
-    let client = DydxHttpClient::new(Some(base_url), Some(30), None, is_testnet, None)?;
+    let client = DydxHttpClient::new(Some(base_url), 30, None, network, None)?;
 
     let start = std::time::Instant::now();
     let instruments = client.request_instruments(None, None, None).await?;
@@ -86,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         instruments.len(),
         elapsed.as_secs_f64()
     );
+
     if show_summary {
         print_instrument_summary(&instruments);
         return Ok(());
@@ -96,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for inst in instruments.iter().take(5) {
             log::info!("   - {} ({})", inst.id().symbol, inst.instrument_class());
         }
+
         if instruments.len() > 5 {
             log::info!("   ... and {} more", instruments.len() - 5);
         }
@@ -106,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Construct InstrumentId for lookup (symbol is in format "BTC-USD", need "BTC-USD-PERP")
     let perp_symbol = format!("{symbol}-PERP");
-    let instrument_id = InstrumentId::new(Symbol::new(&perp_symbol), Venue::new("DYDX"));
+    let instrument_id = InstrumentId::new(Symbol::new(&perp_symbol), *DYDX_VENUE);
     let start = std::time::Instant::now();
     let instrument = client.get_instrument(&instrument_id);
     let elapsed = start.elapsed();
@@ -288,6 +294,7 @@ fn print_instrument_summary(instruments: &[InstrumentAny]) {
     for (base, count) in bases.iter().take(20) {
         log::info!("  {base:10} : {count:4} instruments");
     }
+
     if bases.len() > 20 {
         log::info!("  ... and {} more base assets", bases.len() - 20);
     }
@@ -303,6 +310,7 @@ fn print_instrument_summary(instruments: &[InstrumentAny]) {
             inst.size_precision()
         );
     }
+
     if instruments.len() > 5 {
         log::info!("  ... and {} more", instruments.len() - 5);
     }

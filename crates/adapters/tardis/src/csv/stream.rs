@@ -32,6 +32,7 @@ use nautilus_model::{
 use pyo3::{Py, PyAny, Python};
 
 use crate::{
+    common::parse::{parse_instrument_id, parse_timestamp},
     csv::{
         create_book_order, create_csv_reader, infer_precision, parse_delta_record,
         parse_derivative_ticker_record, parse_quote_record, parse_trade_record,
@@ -40,7 +41,6 @@ use crate::{
             TardisOrderBookSnapshot25Record, TardisQuoteRecord, TardisTradeRecord,
         },
     },
-    parse::{parse_instrument_id, parse_timestamp},
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -88,7 +88,7 @@ impl DeltaStreamIterator {
                 let mut reader = create_csv_reader(&filepath)?;
                 let mut record = StringRecord::new();
                 let (detected_price, detected_size) =
-                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000)?;
+                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000);
                 (
                     price_precision.unwrap_or(detected_price),
                     size_precision.unwrap_or(detected_size),
@@ -117,7 +117,7 @@ impl DeltaStreamIterator {
         reader: &mut Reader<Box<dyn std::io::Read>>,
         record: &mut StringRecord,
         sample_size: usize,
-    ) -> anyhow::Result<(u8, u8)> {
+    ) -> (u8, u8) {
         let mut max_price_precision = 0u8;
         let mut max_size_precision = 0u8;
         let mut records_scanned = 0;
@@ -136,7 +136,7 @@ impl DeltaStreamIterator {
             }
         }
 
-        Ok((max_price_precision, max_size_precision))
+        (max_price_precision, max_size_precision)
     }
 }
 
@@ -178,6 +178,7 @@ impl Iterator for DeltaStreamIterator {
                         if self.buffer.is_empty() {
                             return None;
                         }
+
                         if let Some(last_delta) = self.buffer.last_mut() {
                             last_delta.flags = RecordFlag::F_LAST.value();
                         }
@@ -346,7 +347,7 @@ impl BatchedDeltasStreamIterator {
             } else {
                 // One or both precisions missing, detect from sample including first record
                 let (detected_price, detected_size) =
-                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000)?;
+                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000);
                 (
                     price_precision.unwrap_or(detected_price),
                     size_precision.unwrap_or(detected_size),
@@ -376,7 +377,7 @@ impl BatchedDeltasStreamIterator {
         reader: &mut Reader<Box<dyn std::io::Read>>,
         record: &mut StringRecord,
         sample_size: usize,
-    ) -> anyhow::Result<(u8, u8)> {
+    ) -> (u8, u8) {
         let mut max_price_precision = 0u8;
         let mut max_size_precision = 0u8;
         let mut records_scanned = 0;
@@ -395,7 +396,7 @@ impl BatchedDeltasStreamIterator {
             }
         }
 
-        Ok((max_price_precision, max_size_precision))
+        (max_price_precision, max_size_precision)
     }
 
     fn fill_pending_batches(&mut self) -> Option<anyhow::Result<()>> {
@@ -510,6 +511,7 @@ impl Iterator for BatchedDeltasStreamIterator {
         }
 
         self.buffer.clear();
+
         if let Some(Err(e)) = self.fill_pending_batches() {
             return Some(Err(e));
         }
@@ -596,7 +598,7 @@ impl QuoteStreamIterator {
                 let mut reader = create_csv_reader(&filepath)?;
                 let mut record = StringRecord::new();
                 let (detected_price, detected_size) =
-                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000)?;
+                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000);
                 (
                     price_precision.unwrap_or(detected_price),
                     size_precision.unwrap_or(detected_size),
@@ -622,7 +624,7 @@ impl QuoteStreamIterator {
         reader: &mut Reader<Box<dyn std::io::Read>>,
         record: &mut StringRecord,
         sample_size: usize,
-    ) -> anyhow::Result<(u8, u8)> {
+    ) -> (u8, u8) {
         let mut max_price_precision = 2u8;
         let mut max_size_precision = 0u8;
         let mut records_scanned = 0;
@@ -635,14 +637,17 @@ impl QuoteStreamIterator {
                             max_price_precision =
                                 max_price_precision.max(infer_precision(bid_price_val));
                         }
+
                         if let Some(ask_price_val) = data.ask_price {
                             max_price_precision =
                                 max_price_precision.max(infer_precision(ask_price_val));
                         }
+
                         if let Some(bid_amount_val) = data.bid_amount {
                             max_size_precision =
                                 max_size_precision.max(infer_precision(bid_amount_val));
                         }
+
                         if let Some(ask_amount_val) = data.ask_amount {
                             max_size_precision =
                                 max_size_precision.max(infer_precision(ask_amount_val));
@@ -655,7 +660,7 @@ impl QuoteStreamIterator {
             }
         }
 
-        Ok((max_price_precision, max_size_precision))
+        (max_price_precision, max_size_precision)
     }
 }
 
@@ -787,7 +792,7 @@ impl TradeStreamIterator {
                 let mut reader = create_csv_reader(&filepath)?;
                 let mut record = StringRecord::new();
                 let (detected_price, detected_size) =
-                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000)?;
+                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000);
                 (
                     price_precision.unwrap_or(detected_price),
                     size_precision.unwrap_or(detected_size),
@@ -813,7 +818,7 @@ impl TradeStreamIterator {
         reader: &mut Reader<Box<dyn std::io::Read>>,
         record: &mut StringRecord,
         sample_size: usize,
-    ) -> anyhow::Result<(u8, u8)> {
+    ) -> (u8, u8) {
         let mut max_price_precision = 2u8;
         let mut max_size_precision = 0u8;
         let mut records_scanned = 0;
@@ -832,7 +837,7 @@ impl TradeStreamIterator {
             }
         }
 
-        Ok((max_price_precision, max_size_precision))
+        (max_price_precision, max_size_precision)
     }
 }
 
@@ -977,7 +982,7 @@ impl Depth10StreamIterator {
                 let mut reader = create_csv_reader(&filepath)?;
                 let mut record = StringRecord::new();
                 let (detected_price, detected_size) =
-                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000)?;
+                    Self::detect_precision_from_sample(&mut reader, &mut record, 10_000);
                 (
                     price_precision.unwrap_or(detected_price),
                     size_precision.unwrap_or(detected_size),
@@ -1000,7 +1005,7 @@ impl Depth10StreamIterator {
         })
     }
 
-    fn process_snapshot5(&mut self, data: TardisOrderBookSnapshot5Record) -> OrderBookDepth10 {
+    fn process_snapshot5(&self, data: &TardisOrderBookSnapshot5Record) -> OrderBookDepth10 {
         let instrument_id = self
             .instrument_id
             .unwrap_or_else(|| parse_instrument_id(&data.exchange, data.symbol));
@@ -1069,7 +1074,7 @@ impl Depth10StreamIterator {
         )
     }
 
-    fn process_snapshot25(&mut self, data: TardisOrderBookSnapshot25Record) -> OrderBookDepth10 {
+    fn process_snapshot25(&self, data: &TardisOrderBookSnapshot25Record) -> OrderBookDepth10 {
         let instrument_id = self
             .instrument_id
             .unwrap_or_else(|| parse_instrument_id(&data.exchange, data.symbol));
@@ -1152,7 +1157,7 @@ impl Depth10StreamIterator {
         reader: &mut Reader<Box<dyn std::io::Read>>,
         record: &mut StringRecord,
         sample_size: usize,
-    ) -> anyhow::Result<(u8, u8)> {
+    ) -> (u8, u8) {
         let mut max_price_precision = 2u8;
         let mut max_size_precision = 0u8;
         let mut records_scanned = 0;
@@ -1166,14 +1171,17 @@ impl Depth10StreamIterator {
                             max_price_precision =
                                 max_price_precision.max(infer_precision(bid_price));
                         }
+
                         if let Some(ask_price) = data.asks_0_price {
                             max_price_precision =
                                 max_price_precision.max(infer_precision(ask_price));
                         }
+
                         if let Some(bid_amount) = data.bids_0_amount {
                             max_size_precision =
                                 max_size_precision.max(infer_precision(bid_amount));
                         }
+
                         if let Some(ask_amount) = data.asks_0_amount {
                             max_size_precision =
                                 max_size_precision.max(infer_precision(ask_amount));
@@ -1186,14 +1194,17 @@ impl Depth10StreamIterator {
                             max_price_precision =
                                 max_price_precision.max(infer_precision(bid_price));
                         }
+
                         if let Some(ask_price) = data.asks_0_price {
                             max_price_precision =
                                 max_price_precision.max(infer_precision(ask_price));
                         }
+
                         if let Some(bid_amount) = data.bids_0_amount {
                             max_size_precision =
                                 max_size_precision.max(infer_precision(bid_amount));
                         }
+
                         if let Some(ask_amount) = data.asks_0_amount {
                             max_size_precision =
                                 max_size_precision.max(infer_precision(ask_amount));
@@ -1206,7 +1217,7 @@ impl Depth10StreamIterator {
             }
         }
 
-        Ok((max_price_precision, max_size_precision))
+        (max_price_precision, max_size_precision)
     }
 }
 
@@ -1235,11 +1246,11 @@ impl Iterator for Depth10StreamIterator {
                         5 => self
                             .record
                             .deserialize::<TardisOrderBookSnapshot5Record>(None)
-                            .map(|data| self.process_snapshot5(data)),
+                            .map(|data| self.process_snapshot5(&data)),
                         25 => self
                             .record
                             .deserialize::<TardisOrderBookSnapshot25Record>(None)
-                            .map(|data| self.process_snapshot25(data)),
+                            .map(|data| self.process_snapshot25(&data)),
                         _ => return Some(Err(anyhow::anyhow!("Invalid levels: {}", self.levels))),
                     };
 
@@ -1489,7 +1500,10 @@ mod tests {
     use rstest::*;
 
     use super::*;
-    use crate::{common::testing::get_test_data_path, csv::load::load_deltas, parse::parse_price};
+    use crate::{
+        common::{parse::parse_price, testing::get_test_data_path},
+        csv::load::load_deltas,
+    };
 
     #[rstest]
     #[case(0.0, 0)]
@@ -1901,10 +1915,12 @@ binance,BTCUSDT,1640995202000000,1640995202100000,50001.12,1.12,49999.12,1.62,50
         // Add bid and ask levels (we'll only populate first few for testing)
         let mut bid_headers = Vec::new();
         let mut ask_headers = Vec::new();
+
         for i in 0..25 {
             bid_headers.push(format!("bids[{i}].price"));
             bid_headers.push(format!("bids[{i}].amount"));
         }
+
         for i in 0..25 {
             ask_headers.push(format!("asks[{i}].price"));
             ask_headers.push(format!("asks[{i}].amount"));
@@ -1913,6 +1929,7 @@ binance,BTCUSDT,1640995202000000,1640995202100000,50001.12,1.12,49999.12,1.62,50
         for header in &bid_headers {
             header_parts.push(header);
         }
+
         for header in &ask_headers {
             header_parts.push(header);
         }

@@ -18,8 +18,8 @@
 use std::borrow::Cow;
 
 use nautilus_model::enums::{
-    ContingencyType, LiquiditySide, OrderSide, OrderSideSpecified, OrderStatus, OrderType,
-    PositionSide, TimeInForce,
+    ContingencyType, LiquiditySide, MarketStatusAction, OrderSide, OrderSideSpecified, OrderStatus,
+    OrderType, PositionSide, TimeInForce,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use strum::{AsRefStr, Display, EnumIter, EnumString};
@@ -48,6 +48,10 @@ use strum::{AsRefStr, Display, EnumIter, EnumString};
         from_py_object,
         rename_all = "SCREAMING_SNAKE_CASE",
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bitmex")
 )]
 pub enum BitmexSymbolStatus {
     /// Symbol is open for trading.
@@ -121,6 +125,10 @@ impl From<BitmexSide> for OrderSide {
         eq_int,
         from_py_object
     )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bitmex")
 )]
 pub enum BitmexPositionSide {
     /// Long position.
@@ -263,6 +271,16 @@ pub enum BitmexOrderStatus {
     Rejected,
     /// Order has expired according to its time in force.
     Expired,
+}
+
+impl BitmexOrderStatus {
+    /// Returns whether this status represents a terminal order state.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Filled | Self::Canceled | Self::Rejected | Self::Expired
+        )
+    }
 }
 
 impl From<BitmexOrderStatus> for OrderStatus {
@@ -798,6 +816,18 @@ pub enum BitmexInstrumentState {
     Delisted,
 }
 
+impl From<&BitmexInstrumentState> for MarketStatusAction {
+    fn from(state: &BitmexInstrumentState) -> Self {
+        match state {
+            BitmexInstrumentState::Open => Self::Trading,
+            BitmexInstrumentState::Closed => Self::Close,
+            BitmexInstrumentState::Settled => Self::Close,
+            BitmexInstrumentState::Unlisted => Self::NotAvailableForTrading,
+            BitmexInstrumentState::Delisted => Self::NotAvailableForTrading,
+        }
+    }
+}
+
 /// Represents the fair price calculation method.
 #[derive(
     Clone, Debug, Display, PartialEq, Eq, AsRefStr, EnumIter, EnumString, Serialize, Deserialize,
@@ -826,6 +856,46 @@ pub enum BitmexMarkMethod {
     LastPricePreLaunch,
     /// Composite index.
     CompositeIndex,
+}
+
+/// BitMEX API environment.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Display,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    EnumIter,
+    EnumString,
+    Serialize,
+    Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(ascii_case_insensitive, serialize_all = "lowercase")]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.bitmex",
+        from_py_object,
+        rename_all = "SCREAMING_SNAKE_CASE",
+    )
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.bitmex")
+)]
+pub enum BitmexEnvironment {
+    /// Live trading environment.
+    #[default]
+    Mainnet,
+    /// Testnet environment.
+    Testnet,
 }
 
 #[cfg(test)]
@@ -1206,5 +1276,24 @@ mod tests {
         let result = BitmexTimeInForce::try_from_time_in_force(TimeInForce::Ioc);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), BitmexTimeInForce::ImmediateOrCancel);
+    }
+
+    #[rstest]
+    #[case(BitmexInstrumentState::Open, MarketStatusAction::Trading)]
+    #[case(BitmexInstrumentState::Closed, MarketStatusAction::Close)]
+    #[case(BitmexInstrumentState::Settled, MarketStatusAction::Close)]
+    #[case(
+        BitmexInstrumentState::Unlisted,
+        MarketStatusAction::NotAvailableForTrading
+    )]
+    #[case(
+        BitmexInstrumentState::Delisted,
+        MarketStatusAction::NotAvailableForTrading
+    )]
+    fn test_bitmex_instrument_state_to_market_status_action(
+        #[case] state: BitmexInstrumentState,
+        #[case] expected: MarketStatusAction,
+    ) {
+        assert_eq!(MarketStatusAction::from(&state), expected);
     }
 }

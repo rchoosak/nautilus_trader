@@ -1,13 +1,12 @@
 # Backtesting
 
-Backtesting with NautilusTrader is a methodical simulation process that replicates trading
-activities using a specific system implementation. This system is composed of various components
-including the built-in engines, `Cache`, [MessageBus](message_bus.md), `Portfolio`, [Actors](actors.md), [Strategies](strategies.md), [Execution Algorithms](execution.md),
-and other user-defined modules. The entire trading simulation is predicated on a stream of historical data processed by a
-`BacktestEngine`. Once this data stream is exhausted, the engine concludes its operation, producing
-detailed results and performance metrics for in-depth analysis.
+Backtesting simulates trading using a specific system implementation. The system comprises the
+built-in engines, `Cache`, [MessageBus](message_bus.md), `Portfolio`, [Actors](actors.md),
+[Strategies](strategies.md), [Execution Algorithms](execution.md), and user-defined modules.
+A `BacktestEngine` processes a stream of historical data. When the stream is exhausted, the
+engine produces results and performance metrics for analysis.
 
-It's important to recognize that NautilusTrader offers two distinct API levels for setting up and conducting backtests:
+NautilusTrader offers two API levels for backtesting:
 
 - **High-level API**: Uses a `BacktestNode` and configuration objects (`BacktestEngine`s are used internally).
 - **Low-level API**: Uses a `BacktestEngine` directly with more "manual" setup.
@@ -24,7 +23,7 @@ Consider using the **low-level** API when:
 Consider using the **high-level** API when:
 
 - Your data stream exceeds available memory, requiring streaming data in batches.
-- You want to leverage the performance and convenience of the `ParquetDataCatalog` for storing data in the Nautilus-specific Parquet format.
+- You want the performance and convenience of the `ParquetDataCatalog` for storing data in the Nautilus-specific Parquet format.
 - You value the flexibility and functionality of passing configuration objects to define and manage multiple backtest runs across various engines simultaneously.
 
 ## Low-level API
@@ -100,7 +99,10 @@ engine.add_data(all_bars, sort=True)
 
 **Strategy 3: Use streaming API for very large datasets**
 
-For datasets that don't fit in memory, use the streaming API:
+For datasets that don't fit in memory, there are two streaming approaches:
+
+**Automatic chunking** - supply a generator that yields batches. The engine pulls chunks
+lazily during a single `run()` call:
 
 ```python
 def data_generator():
@@ -113,13 +115,31 @@ engine.add_data_iterator(
     data_name="my_data_stream",
     generator=data_generator(),
 )
+
+engine.run()  # Chunks are consumed on-demand
+```
+
+**Manual chunking** - load and run each batch yourself. This is the pattern
+used internally by `BacktestNode` and gives full control over batch boundaries:
+
+```python
+engine.add_strategy(strategy)
+
+for batch in data_batches:
+    engine.add_data(batch)
+    engine.run(streaming=True)
+    engine.clear_data()
+
+engine.end()  # Finalize: flushes remaining timers, stops engines, produces results
 ```
 
 :::note
-The streaming API processes data chunks on-demand during the backtest run, avoiding the need to load all data into memory upfront.
+In streaming mode, timer advancement stops when data exhausts for each batch. Timers scheduled
+past the last data point (e.g. bar aggregation intervals) are deferred until more data arrives
+or `end()` is called, which flushes up to the `end` boundary from the last `run()` call.
 :::
 
-:::tip Performance impact
+:::tip[Performance impact]
 For a backtest with 10 instruments, each with 1M bars:
 
 - Sorting on each call: ~10 sorts of increasing size (1M, 2M, 3M, ... 10M bars).
@@ -246,11 +266,12 @@ engine.run()
 Instruments and data persist across resets by default for `BacktestEngine`, making parameter optimizations straightforward.
 :::
 
-:::tip Best practices
+:::tip[Best practices]
 
 - **For production backtesting:** Use `BacktestNode` with configuration objects.
 - **For parameter optimizations:** Use `BacktestEngine.reset()` to run multiple strategies against the same data.
 - **For quick experiments:** Either approach works - choose based on individual use case.
+
 :::
 
 ## Data
@@ -282,7 +303,7 @@ flowchart LR
 ```
 
 1. **Order Book Data/Deltas (L3 market-by-order)**:
-   - Comprehensive market depth with visibility of all individual orders.
+   - Full market depth with visibility of all individual orders.
 
 2. **Order Book Data/Deltas (L2 market-by-price)**:
    - Market depth visibility across all price levels.
@@ -426,17 +447,32 @@ timestamp derived from the simulated latency. The settle loop considers inflight
 at the current timestamp as pending, so zero-latency or same-tick latency configurations still settle
 correctly. Commands with future timestamps are deferred and processed when the engine reaches that time.
 
+#### Shutdown semantics
+
+`BacktestEngine::end()` invokes each strategy's `on_stop` handler, drains and settles any commands
+it emits (e.g. `close_all_positions`, `cancel_all_orders`), then stops the engines.
+
+- Final positions, orders, and account balances reflect `on_stop` fills and cancels.
+- Strategy event handlers do not fire for the resulting events: the strategy is already `Stopped`,
+  so `OrderFilled` and similar events log but bypass `on_order_filled` and friends. Logic that
+  reacts to fills must run before `on_stop` returns.
+- Simulation modules do not re-run at shutdown. `SimulationModule::process` is once per timestamp;
+  re-invoking would double-apply side effects like FX rollover interest.
+- A `LatencyModel` defers `on_stop` commands by its configured delay; the engine clock does not
+  advance past the final data point, so those commands stay pending. Close earlier (e.g. in the
+  last `on_bar`) for reliable closing fills with latency.
+
 ### Fill modeling philosophy
 
-NautilusTrader treats historical order book and trade data as **immutable** during backtesting. What happened in the market is preserved exactly as recorded—fills never modify the underlying book state.
+NautilusTrader treats historical order book and trade data as **immutable** during backtesting. What happened in the market is preserved exactly as recorded. Fills never modify the underlying book state.
 
-This addresses a gap in academic literature: most research focuses on live market dynamics where the book actually evolves. Historical backtesting with frozen snapshots is a distinct engineering problem—how do we simulate realistic fills against data that doesn't change in response to our orders?
+This addresses a gap in academic literature: most research focuses on live market dynamics where the book actually evolves. Historical backtesting with frozen snapshots is a distinct engineering problem: how do we simulate realistic fills against data that doesn't change in response to our orders?
 
 **Design choices:**
 
 - **Immutable historical data**: Order book and trade data are never modified.
 - **Optional consumption tracking**: When `liquidity_consumption=True`, the engine tracks consumed liquidity per price level to prevent duplicate fills. See [Order book immutability](#order-book-immutability) for configuration.
-- **Deterministic results**: The same backtest with the same data and configuration produces identical results when probabilistic fill models use a fixed `random_seed`.
+- **Reproducible results**: A fixed `random_seed` pins the probabilistic fill model's PRNG. Same-process reruns are expected to match; cross-process reruns may differ in rare cases due to hash-ordering effects outside the fill model.
 
 ### Fill price determination
 
@@ -610,7 +646,7 @@ The order book itself handles slippage naturally based on available liquidity at
 :::warning
 The historical order book is immutable during backtesting. Book depth is **not** decremented after fills.
 By default (`liquidity_consumption=False`), the same liquidity can be consumed repeatedly within an iteration.
-Enable `liquidity_consumption=True` to track consumed liquidity per price level—consumption resets when fresh
+Enable `liquidity_consumption=True` to track consumed liquidity per price level. Consumption resets when fresh
 data arrives at that level. See [Order book immutability](#order-book-immutability) for details.
 :::
 
@@ -665,8 +701,8 @@ venue_config = BacktestVenueConfig(
 
 For each price level, the engine maintains:
 
-- `original_size`: The book's quantity when tracking began
-- `consumed`: How much has been filled against this level
+- `original_size`: The book's quantity when tracking began.
+- `consumed`: How much has been filled against this level.
 
 When processing a fill:
 
@@ -704,7 +740,7 @@ order quantity after exhausting displayed liquidity.
 6. Order fills another 200 units. 770 units remain open.
 7. Fills continue as fresh liquidity arrives at crossed price levels.
 
-This behavior provides conservative fill simulation—your order only fills against liquidity
+This behavior provides conservative fill simulation: your order only fills against liquidity
 actually observed in the data, rather than inferring liquidity from price movements.
 
 **Trade tick liquidity:**
@@ -749,7 +785,7 @@ to simulate queue position probabilistically.
 the engine uses this as fill evidence. However, this represents liquidity that existed momentarily and may
 not reflect sustained availability.
 
-### Trade based execution
+### Trade-based execution
 
 Trade tick data triggers order fills by default (`trade_execution=True`). A trade tick indicates that liquidity
 was accessed at the trade price, allowing resting limit orders to match. This mirrors the default behavior
@@ -784,7 +820,7 @@ When a trade tick triggers order matching, the engine determines fills as follow
 1. **Book reflects trade price**: If the order book has liquidity at the trade price, fills use book depth (standard behavior).
 2. **Book doesn't reflect trade price**: If the book's liquidity is at a different price, the engine uses a "trade-driven fill" at the order's limit price, capped to `min(order.leaves_qty, trade.size)`.
 
-This ensures that when a trade prints through the spread but the book hasn't updated, fills are bounded by what the trade tick actually evidences. When `liquidity_consumption=False` (default), the same trade size can fill multiple orders within an iteration. When `liquidity_consumption=True`, consumption tracking applies to trade-driven fills as well—repeated fills at the same trade price will be bounded by consumed liquidity until fresh data arrives.
+This ensures that when a trade prints through the spread but the book hasn't updated, fills are bounded by what the trade tick actually evidences. When `liquidity_consumption=False` (default), the same trade size can fill multiple orders within an iteration. When `liquidity_consumption=True`, consumption tracking applies to trade-driven fills as well. Repeated fills at the same trade price will be bounded by consumed liquidity until fresh data arrives.
 
 **Restoration behavior:**
 
@@ -813,10 +849,10 @@ while trade ticks trigger execution for orders that might be inside the spread o
 
 A common source of confusion is the `aggressor_side` field on trade ticks:
 
-- **SELLER trade**: A seller aggressed—they sold into the bid. This provides evidence of fill-able liquidity for **BUY** orders at the trade price.
-- **BUYER trade**: A buyer aggressed—they bought from the ask. This provides evidence of fill-able liquidity for **SELL** orders at the trade price.
+- **SELLER trade**: A seller aggressed, selling into the bid. This provides evidence of fill-able liquidity for **BUY** orders at the trade price.
+- **BUYER trade**: A buyer aggressed, buying from the ask. This provides evidence of fill-able liquidity for **SELL** orders at the trade price.
 
-In other words, trade ticks trigger fills for orders on the **opposite** side of the aggressor. A SELLER trade at 100.00 can fill your resting BUY LIMIT at 100.00, but cannot fill your SELL LIMIT—the trade already represents someone else selling.
+In other words, trade ticks trigger fills for orders on the **opposite** side of the aggressor. A SELLER trade at 100.00 can fill your resting BUY LIMIT at 100.00, but cannot fill your SELL LIMIT, since the trade already represents someone else selling.
 
 #### Combining L2 book data with trade ticks
 
@@ -835,8 +871,8 @@ When using L2 order book data (e.g., 100ms throttled depth snapshots) combined w
 **Common misconception**: Users sometimes expect every trade tick to trigger fills. Remember:
 
 - Only trades on the **opposite** side can fill your orders.
-- SELLER trades → potential BUY fills.
-- BUYER trades → potential SELL fills.
+- SELLER trades -> potential BUY fills.
+- BUYER trades -> potential SELL fills.
 - Book UPDATE events move the market but only trigger fills if prices cross your order.
 
 #### Queue position tracking
@@ -853,18 +889,18 @@ orders are "ahead" of your order at a given price level.
 2. **Trade ticks**: When trade ticks occur at the order's price level, the "quantity ahead" is
    decremented by the trade size. Only trades on the correct side affect the queue (BUYER trades
    decrement queue for SELL orders, SELLER trades decrement queue for BUY orders). Trades with
-   `NO_AGGRESSOR` (common in historical datasets lacking aggressor metadata) affect both sides—
-   this is pessimistic but prevents orders from stalling indefinitely.
+   `NO_AGGRESSOR` (common in historical datasets lacking aggressor metadata) affect both sides.
+   This is pessimistic but prevents orders from stalling indefinitely.
 
 3. **Fill eligibility**: The order becomes eligible to fill only when the quantity ahead reaches zero.
    On the tick that clears the queue, only the excess volume (trade size minus queue ahead) is
-   available for fill—preventing overfill.
+   available for fill, preventing overfill.
 
 4. **Price level DELETE**: If the order book level is deleted (BookAction.DELETE), the queue clears
    immediately, making the order fill-eligible. UPDATE actions are ignored (queue unchanged).
 
 5. **Order modification**: If the order is modified (price or quantity change), the queue position
-   resets—the order moves to the back of the queue at its new price level.
+   resets. The order moves to the back of the queue at its new price level.
 
 **Configuration:**
 
@@ -885,9 +921,9 @@ venue_config = BacktestVenueConfig(
 
 1. Order book shows 100 units at bid 100.00.
 2. You place a BUY LIMIT at 100.00 for 50 units. Queue ahead = 100.
-3. SELLER trade of 80 units at 100.00 → queue ahead = 20. No fill yet.
-4. SELLER trade of 30 units at 100.00 → queue clears with 10 excess. Fill = 10 units.
-5. Next SELLER trade of 50 units → fill remaining 40 units.
+3. SELLER trade of 80 units at 100.00 -> queue ahead = 20. No fill yet.
+4. SELLER trade of 30 units at 100.00 -> queue clears with 10 excess. Fill = 10 units.
+5. Next SELLER trade of 50 units -> fill remaining 40 units.
 
 **Limitations:**
 
@@ -928,7 +964,7 @@ behavior depends on many factors (order priority rules, hidden orders, etc.) tha
 perfectly reconstructed from historical data.
 :::
 
-### Bar based execution
+### Bar-based execution
 
 Bar data provides a summary of market activity with four key prices for each time period (assuming bars are aggregated by trades):
 
@@ -951,7 +987,7 @@ granular data such as quotes, trades, or bars (although the simulation will only
 :::warning
 When using bars for execution simulation (enabled by default with `bar_execution=True` in venue configurations),
 Nautilus strictly expects the initialization timestamp (`ts_init`) of each bar to represent its **closing time**.
-This ensures accurate chronological processing, prevents look-ahead bias, and aligns market updates (Open → High → Low → Close) with the moment the bar is complete.
+This ensures accurate chronological processing, prevents look-ahead bias, and aligns market updates (Open -> High -> Low -> Close) with the moment the bar is complete.
 
 The event timestamp (`ts_event`) can represent either the open or close time of the bar:
 
@@ -990,7 +1026,7 @@ Even when you provide bar data, Nautilus maintains an internal order book for ea
      - If your bars are timestamped at the **open**, set `ts_init_delta` to the bar's duration in nanoseconds (e.g., 60_000_000_000 for 1-minute bars) to shift `ts_init` to the close time.
    - The platform ensures all events happen in the correct sequence based on `ts_init`, preventing any possibility of look-ahead bias in your backtests.
 
-:::note Exceptions for bar execution
+:::note[Exceptions for bar execution]
 Bars will **not** be processed for execution (and will not update the order book) in the following cases:
 
 - **Internally aggregated bars**: Bars with `AggregationSource.INTERNAL` are skipped to avoid processing bars that are derived from already-processed tick data.
@@ -1001,7 +1037,7 @@ In these cases, bars will still be received by strategies for analytics and deci
 
 2. **Price processing**:
    - The platform converts each bar's OHLC prices into a sequence of market updates.
-   - By default, updates follow the order: Open → High → Low → Close (configurable via `bar_adaptive_high_low_ordering`).
+   - By default, updates follow the order: Open -> High -> Low -> Close (configurable via `bar_adaptive_high_low_ordering`).
    - If you provide multiple timeframes (like both 1-minute and 5-minute bars), the platform uses the more granular data for highest accuracy.
 
 3. **Executions**:
@@ -1030,13 +1066,13 @@ How these price points are sequenced can be controlled via the `bar_adaptive_hig
 Nautilus supports two modes of bar processing:
 
 1. **Fixed ordering** (`bar_adaptive_high_low_ordering=False`, default)
-   - Processes every bar in a fixed sequence: `Open → High → Low → Close`.
+   - Processes every bar in a fixed sequence: `Open -> High -> Low -> Close`.
    - Simple and deterministic approach.
 
 2. **Adaptive ordering** (`bar_adaptive_high_low_ordering=True`)
    - Uses bar structure to estimate likely price path:
-     - If Open is closer to High: processes as `Open → High → Low → Close`.
-     - If Open is closer to Low: processes as `Open → Low → High → Close`.
+     - If Open is closer to High: processes as `Open -> High -> Low -> Close`.
+     - If Open is closer to Low: processes as `Open -> Low -> High -> Close`.
    - [Research](https://gist.github.com/stefansimik/d387e1d9ff784a8973feca0cde51e363) shows this approach achieves ~75-85% accuracy in predicting correct High/Low sequence (compared to statistical ~50% accuracy with fixed ordering).
    - This is particularly important when both take-profit and stop-loss levels occur within the same bar - as the sequence determines which order fills first.
 
@@ -1060,10 +1096,41 @@ engine.add_venue(
 )
 ```
 
+#### Order submission timing
+
+Bar N's OHLC sequence processes before `on_bar(N)` fires. Without a `LatencyModel`,
+an order submitted from `on_bar` settles immediately and matches against the current
+book, whose top reflects bar N's close.
+
+Attach a `LatencyModel` to the venue to defer the order's effective arrival. With
+bar-only data and no intervening timer events, the order settles after the next bar's
+OHLC sweep, so the fill price is that bar's close (or a later bar's close if latency
+exceeds the bar interval). Finer-grained data (quotes, trades) or timer-driven
+settlement between bars can drain the order earlier, against the book as it stands at
+that point:
+
+```python
+from nautilus_trader.backtest.models import LatencyModel
+
+engine.add_venue(
+    venue=venue,
+    oms_type=OmsType.NETTING,
+    account_type=AccountType.CASH,
+    starting_balances=[Money(10_000, Currency.from_str("USDT"))],
+    latency_model=LatencyModel(base_latency_nanos=1_000_000_000),  # 1 second
+)
+```
+
+:::note
+A native "next-bar-open" execution mode is not provided. A bar's `ts_init` is its
+close timestamp, so the open price is only known once the bar arrives. Filling at
+that open from a signal generated on the prior bar would require look-ahead.
+:::
+
 ### Internal bar aggregation timing
 
 When aggregating time bars internally from tick data, the data engine uses timers to close bars at
-interval boundaries. A timing edge case occurs when data arrives at the exact bar close timestamp—the
+interval boundaries. A timing edge case occurs when data arrives at the exact bar close timestamp: the
 timer may fire before processing boundary data.
 
 Configure `time_bars_build_delay` in `DataEngineConfig` to delay bar close timers:
@@ -1120,11 +1187,11 @@ for more sophisticated liquidity modeling.
 | `TwoTierFillModel`           | 10 contracts at best price, remainder one tick worse.   | Basic market depth simulation.               |
 | `ThreeTierFillModel`         | 50/30/20 contracts across three price levels.           | More realistic depth simulation.             |
 | `ProbabilisticFillModel`     | 50% chance best price, 50% chance one tick slippage.    | Randomized execution quality.                |
-| `SizeAwareFillModel`         | Different execution based on order size (≤10 vs >10).   | Size-dependent market impact.                |
+| `SizeAwareFillModel`         | Different execution based on order size (≤10 vs >10).   | Size‑dependent market impact.                |
 | `LimitOrderPartialFillModel` | Max 5 contracts fill per price touch.                   | Queue position via partial fills.            |
-| `MarketHoursFillModel`       | Wider spreads during low liquidity periods.             | Session-aware execution.                     |
-| `VolumeSensitiveFillModel`   | Liquidity based on recent trading volume.               | Volume-adaptive depth.                       |
-| `CompetitionAwareFillModel`  | Only percentage of visible liquidity available.         | Multi-participant competition.               |
+| `MarketHoursFillModel`       | Wider spreads during low liquidity periods.             | Session‑aware execution.                     |
+| `VolumeSensitiveFillModel`   | Liquidity based on recent trading volume.               | Volume‑adaptive depth.                       |
+| `CompetitionAwareFillModel`  | Only percentage of visible liquidity available.         | Multi‑participant competition.               |
 
 #### Configuring fill models
 
@@ -1287,15 +1354,11 @@ Also verify that:
 
 :::
 
-## Account types
+## Accounts
 
-When you attach a venue to the engine—either for live trading or a back‑test—you must pick one of three accounting modes by passing the `account_type` parameter:
-
-| Account type | Typical use-case                                 | What the engine locks                                                     |
-| ------------ | ------------------------------------------------ | ------------------------------------------------------------------------- |
-| Cash         | Spot trading (e.g., BTC/USDT, stocks).           | Notional value for every position a pending order would open.             |
-| Margin       | Derivatives or any product that allows leverage. | Initial margin for each order plus maintenance margin for open positions. |
-| Betting      | Sports betting, bookmaking.                      | Stake required by the venue; no leverage.                                 |
+Every backtest venue is attached with one of three `account_type` values:
+`CASH`, `MARGIN`, or `BETTING`. For the full data model, query API, and margin
+model reference, see [Accounting](accounting.md).
 
 Example of adding a `CASH` account for a backtest venue:
 
@@ -1318,108 +1381,19 @@ engine.add_venue(
 )
 ```
 
-### Cash accounts
-
-Cash accounts settle trades in full; there is no leverage and therefore no concept of margin.
-
-### Margin accounts
-
-A *margin account* facilitates trading of instruments requiring margin, such as futures or leveraged products.
-It tracks account balances, calculates required margins, and manages leverage to ensure sufficient collateral for positions and orders.
-
-**Key concepts**:
-
-- **Leverage**: Amplifies trading exposure relative to account equity. Higher leverage increases potential returns and risks.
-- **Initial Margin**: Collateral required to submit an order to open a position.
-- **Maintenance Margin**: Minimum collateral required to maintain an open position.
-- **Locked Balance**: Funds reserved as collateral, unavailable for new orders or withdrawals.
-
-:::note
-Reduce-only orders **do not** contribute to `balance_locked` in cash accounts,
-nor do they add to initial margin in margin accounts—as they can only reduce existing exposure.
-:::
-
-### Betting accounts
-
-Betting accounts are specialised for venues where you stake an amount to win or lose a fixed payout (some prediction markets, sports books, etc.).
-The engine locks only the stake required by the venue; leverage and margin are not applicable.
-
 ## Margin models
 
-NautilusTrader provides flexible margin calculation models to accommodate different venue types and trading scenarios.
+Margin models determine how the simulated exchange reserves collateral for
+orders and positions in backtest runs. The model types (`StandardMarginModel`
+vs `LeveragedMarginModel`), their formulas, the default behavior, and custom
+model authoring are covered in the dedicated
+[Accounting](accounting.md#margin-models) guide.
 
-### Overview
+This section covers only the backtest-specific configuration.
 
-Different venues and brokers have varying approaches to calculating margin requirements:
+### Backtest venue configuration
 
-- **Traditional Brokers** (Interactive Brokers, TD Ameritrade): Fixed margin percentages regardless of leverage.
-- **Crypto Exchanges** (Binance, some others): Leverage may reduce margin requirements.
-- **Futures Exchanges** (CME, ICE): Fixed margin amounts per contract.
-
-### Available models
-
-#### StandardMarginModel
-
-Uses fixed percentages without leverage division, matching traditional broker behavior.
-
-**Formula:**
-
-```python
-# Fixed percentages - leverage ignored
-margin = notional * instrument.margin_init
-```
-
-- Initial Margin = `notional_value * instrument.margin_init`
-- Maintenance Margin = `notional_value * instrument.margin_maint`
-
-**Use cases:**
-
-- Traditional brokers (Interactive Brokers, TD Ameritrade).
-- Futures exchanges (CME, ICE).
-- Forex brokers with fixed margin requirements.
-
-#### LeveragedMarginModel
-
-Divides margin requirements by leverage.
-
-**Formula:**
-
-```python
-# Leverage reduces margin requirements
-adjusted_notional = notional / leverage
-margin = adjusted_notional * instrument.margin_init
-```
-
-- Initial Margin = `(notional_value / leverage) * instrument.margin_init`
-- Maintenance Margin = `(notional_value / leverage) * instrument.margin_maint`
-
-**Use cases:**
-
-- Crypto exchanges that reduce margin with leverage.
-- Venues where leverage affects margin requirements.
-
-### Usage
-
-#### Programmatic configuration
-
-```python
-from nautilus_trader.backtest.models import LeveragedMarginModel
-from nautilus_trader.backtest.models import StandardMarginModel
-from nautilus_trader.test_kit.stubs.execution import TestExecStubs
-
-# Create account
-account = TestExecStubs.margin_account()
-
-# Set standard model for traditional brokers
-standard_model = StandardMarginModel()
-account.set_margin_model(standard_model)
-
-# Or use leveraged model for crypto exchanges
-leveraged_model = LeveragedMarginModel()
-account.set_margin_model(leveraged_model)
-```
-
-#### Backtest configuration
+Specify the margin model on `BacktestVenueConfig` via `MarginModelConfig`:
 
 ```python
 from nautilus_trader.backtest.config import BacktestVenueConfig
@@ -1434,166 +1408,39 @@ venue_config = BacktestVenueConfig(
 )
 ```
 
-#### Available model types
+Available `model_type` values:
 
-- `"leveraged"`: Margin reduced by leverage (default).
-- `"standard"`: Fixed percentages (traditional brokers).
-- Custom class path: `"my_package.my_module.MyMarginModel"`.
+- `"leveraged"`: margin reduced by leverage (default).
+- `"standard"`: fixed percentages (traditional brokers).
+- Fully-qualified class path for a custom model:
+  `"my_package.my_module:MyMarginModel"`.
 
-#### Default behavior
+### High-level backtest API
 
-By default, `MarginAccount` uses `LeveragedMarginModel`.
-
-#### Real-world example
-
-**EUR/USD Trading Scenario:**
-
-- **Instrument**: EUR/USD
-- **Quantity**: 100,000 EUR
-- **Price**: 1.10000
-- **Notional Value**: $110,000
-- **Leverage**: 50x
-- **Instrument Margin Init**: 3%
-
-**Margin calculations:**
-
-| Model     | Calculation            | Result | Percentage |
-| --------- | ---------------------- | ------ | ---------- |
-| Standard  | $110,000 × 0.03        | $3,300 | 3.00%      |
-| Leveraged | ($110,000 ÷ 50) × 0.03 | $66    | 0.06%      |
-
-**Account balance impact:**
-
-- **Account Balance**: $10,000.
-- **Standard Model**: Cannot trade (requires $3,300 margin).
-- **Leveraged Model**: Can trade (requires only $66 margin).
-
-### Real-world scenarios
-
-#### Interactive Brokers EUR/USD futures
+When using the high-level API, attach the margin model in the same way:
 
 ```python
-# IB requires fixed margin regardless of leverage
-account.set_margin_model(StandardMarginModel())
-margin = account.calculate_margin_init(instrument, quantity, price)
-# Result: Fixed percentage of notional value
-```
-
-#### Binance crypto trading
-
-```python
-# Binance may reduce margin with leverage
-account.set_margin_model(LeveragedMarginModel())
-margin = account.calculate_margin_init(instrument, quantity, price)
-# Result: Margin reduced by leverage factor
-```
-
-### Model selection
-
-#### Using the default model
-
-The default `LeveragedMarginModel` works out of the box:
-
-```python
-account = TestExecStubs.margin_account()
-margin = account.calculate_margin_init(instrument, quantity, price)
-```
-
-#### Using the standard model
-
-For traditional broker behavior:
-
-```python
-account.set_margin_model(StandardMarginModel())
-margin = account.calculate_margin_init(instrument, quantity, price)
-```
-
-### Custom models
-
-You can create custom margin models by inheriting from `MarginModel`. Custom models receive configuration through the `MarginModelConfig`:
-
-```python
-from nautilus_trader.backtest.models import MarginModel
-from nautilus_trader.backtest.config import MarginModelConfig
-
-class RiskAdjustedMarginModel(MarginModel):
-    def __init__(self, config: MarginModelConfig):
-        """Initialize with configuration parameters."""
-        self.risk_multiplier = Decimal(str(config.config.get("risk_multiplier", 1.0)))
-        self.use_leverage = config.config.get("use_leverage", False)
-
-    def calculate_margin_init(self, instrument, quantity, price, leverage, use_quote_for_inverse=False):
-        notional = instrument.notional_value(quantity, price, use_quote_for_inverse)
-        if self.use_leverage:
-            adjusted_notional = notional.as_decimal() / leverage
-        else:
-            adjusted_notional = notional.as_decimal()
-        margin = adjusted_notional * instrument.margin_init * self.risk_multiplier
-        return Money(margin, instrument.quote_currency)
-
-    def calculate_margin_maint(self, instrument, side, quantity, price, leverage, use_quote_for_inverse=False):
-        return self.calculate_margin_init(instrument, quantity, price, leverage, use_quote_for_inverse)
-```
-
-#### Using custom models
-
-**Programmatic:**
-
-```python
-from nautilus_trader.backtest.config import MarginModelConfig
-from nautilus_trader.backtest.config import MarginModelFactory
-
-config = MarginModelConfig(
-    model_type="my_package.my_module:RiskAdjustedMarginModel",
-    config={"risk_multiplier": 1.5, "use_leverage": False}
-)
-
-custom_model = MarginModelFactory.create(config)
-account.set_margin_model(custom_model)
-```
-
-### High-level backtest API configuration
-
-When using the high-level backtest API, you can specify margin models in your venue configuration using `MarginModelConfig`:
-
-```python
-from nautilus_trader.backtest.config import MarginModelConfig
 from nautilus_trader.backtest.config import BacktestVenueConfig
+from nautilus_trader.backtest.config import MarginModelConfig
 from nautilus_trader.config import BacktestRunConfig
 
-# Configure venue with specific margin model
 venue_config = BacktestVenueConfig(
     name="SIM",
     oms_type="NETTING",
     account_type="MARGIN",
     starting_balances=["1_000_000 USD"],
     margin_model=MarginModelConfig(
-        model_type="standard"  # Use standard model for traditional broker simulation
+        model_type="standard",  # Traditional broker simulation
     ),
 )
 
-# Use in backtest configuration
 config = BacktestRunConfig(
     venues=[venue_config],
     # ... other config
 )
 ```
 
-#### Configuration examples
-
-**Standard model (traditional brokers):**
-
-```python
-margin_model=MarginModelConfig(model_type="standard")
-```
-
-**Leveraged model (default):**
-
-```python
-margin_model=MarginModelConfig(model_type="leveraged")  # Default
-```
-
-**Custom model with configuration:**
+Custom model with parameters:
 
 ```python
 margin_model=MarginModelConfig(
@@ -1602,11 +1449,35 @@ margin_model=MarginModelConfig(
         "risk_multiplier": 1.5,
         "use_leverage": False,
         "volatility_threshold": 0.02,
-    }
+    },
 )
 ```
 
-The margin model will be automatically applied to the simulated exchange during backtest execution.
+The model is applied to the simulated exchange during backtest execution.
+
+## Trade ID derivation
+
+The simulated exchange (used by both backtest and sandbox execution) emits a
+deterministic `TradeId` for each generated fill. The ID is formatted as
+`T-{hash:016x}-{count:03d}`, where the 16-character hex is an FNV-1a hash of
+`(venue, raw_id, ts_init)` and the trailing counter distinguishes multiple
+fills at the same `ts_init` (e.g. several legs of a bar-driven fill).
+
+**Properties**:
+
+- Deterministic across runs: the same replayed data produces the same
+  `TradeId` every time, so downstream dedup and golden-output comparisons stay
+  stable.
+- Collision-safe across resets: `ts_init` is pinned in backtest data and
+  monotonic in live/sandbox, so a `BacktestEngine.reset()` (or an in-memory
+  `IdsGenerator` reset in a sandbox with persisted orders) cannot mint a
+  `TradeId` that collides with one already in the cache.
+- Bounded length: the hash keeps the identifier under the 36-character
+  `TradeId` cap regardless of venue name length.
+
+The `use_random_ids` venue flag still governs `VenueOrderId` and `PositionId`
+generation, but `TradeId` is always deterministic and is not affected by the
+flag.
 
 ## Related guides
 

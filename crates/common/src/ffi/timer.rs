@@ -197,7 +197,7 @@ impl Drop for TimeEventHandler_API {
 }
 
 impl TimeEventHandler_API {
-    /// Creates a null (sentinel) TimeEventHandler_API.
+    /// Creates a null (sentinel) `TimeEventHandler_API`.
     ///
     /// Used to indicate "no event" when returning from pop operations.
     #[must_use]
@@ -210,8 +210,6 @@ impl TimeEventHandler_API {
 }
 
 /// Drops a `TimeEventHandler_API`, releasing any Python callback reference.
-///
-/// # Safety
 ///
 /// The handler must be valid and not previously dropped.
 #[unsafe(no_mangle)]
@@ -281,6 +279,7 @@ pub unsafe extern "C" fn time_event_new(
     ts_event: u64,
     ts_init: u64,
 ) -> TimeEvent {
+    // SAFETY: `name_ptr` is guaranteed to be a valid C string by the FFI caller contract.
     TimeEvent::new(
         unsafe { cstr_to_ustr(name_ptr) },
         event_id,

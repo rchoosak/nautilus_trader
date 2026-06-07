@@ -17,8 +17,10 @@
 
 use std::fmt::Debug;
 
-use nautilus_core::string::REDACTED;
+use nautilus_core::{env::get_or_env_var_opt, string::secret::REDACTED};
 use zeroize::ZeroizeOnDrop;
+
+use super::consts::TARDIS_API_KEY;
 
 /// API credentials required for Tardis API requests.
 #[derive(Clone, ZeroizeOnDrop)]
@@ -53,8 +55,7 @@ impl Credential {
     /// having been created from a String.
     #[must_use]
     pub fn api_key(&self) -> &str {
-        // SAFETY: The API key is always valid UTF-8 since it was created from a String
-        std::str::from_utf8(&self.api_key).unwrap()
+        std::str::from_utf8(&self.api_key).expect("API key is valid UTF-8")
     }
 
     /// Returns a masked version of the API key for logging purposes.
@@ -63,7 +64,14 @@ impl Credential {
     /// For keys shorter than 8 characters, shows asterisks only.
     #[must_use]
     pub fn api_key_masked(&self) -> String {
-        nautilus_core::string::mask_api_key(self.api_key())
+        nautilus_core::string::secret::mask_api_key(self.api_key())
+    }
+
+    /// Resolves a credential from the provided value or the `TARDIS_API_KEY`
+    /// environment variable.
+    #[must_use]
+    pub fn resolve(api_key: Option<String>) -> Option<Self> {
+        get_or_env_var_opt(api_key, TARDIS_API_KEY).map(Self::new)
     }
 }
 
@@ -91,5 +99,18 @@ mod tests {
         let debug_str = format!("{credential:?}");
         assert!(debug_str.contains(REDACTED));
         assert!(!debug_str.contains("test_api_key"));
+    }
+
+    #[rstest]
+    fn test_resolve_with_explicit_key() {
+        let credential = Credential::resolve(Some("my_key".to_string()));
+        assert!(credential.is_some());
+        assert_eq!(credential.unwrap().api_key(), "my_key");
+    }
+
+    #[rstest]
+    fn test_resolve_prefers_explicit_over_env() {
+        let credential = Credential::resolve(Some("explicit_key".to_string()));
+        assert_eq!(credential.unwrap().api_key(), "explicit_key");
     }
 }

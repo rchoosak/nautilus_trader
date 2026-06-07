@@ -41,10 +41,12 @@ use crate::{
     unsendable,
     from_py_object
 )]
+#[pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.common")]
 #[derive(Debug, Clone)]
 pub struct PyClock(Rc<RefCell<dyn Clock>>);
 
 #[pymethods]
+#[pyo3_stub_gen::derive::gen_stub_pymethods]
 impl PyClock {
     #[staticmethod]
     #[pyo3(name = "new_test")]
@@ -52,11 +54,68 @@ impl PyClock {
         Self(Rc::new(RefCell::new(TestClock::default())))
     }
 
+    /// Returns the current UNIX timestamp in nanoseconds (ns).
+    #[pyo3(name = "timestamp_ns")]
+    fn py_timestamp_ns(&self) -> u64 {
+        self.0.borrow().timestamp_ns().as_u64()
+    }
+
+    /// Returns the current UNIX timestamp in microseconds (μs).
+    #[pyo3(name = "timestamp_us")]
+    fn py_timestamp_us(&self) -> u64 {
+        self.0.borrow().timestamp_us()
+    }
+
+    /// Returns the current UNIX timestamp in milliseconds (ms).
+    #[pyo3(name = "timestamp_ms")]
+    fn py_timestamp_ms(&self) -> u64 {
+        self.0.borrow().timestamp_ms()
+    }
+
+    /// Returns the current UNIX timestamp in seconds.
+    #[pyo3(name = "timestamp")]
+    fn py_timestamp(&self) -> f64 {
+        self.0.borrow().timestamp()
+    }
+
+    /// Returns the current date and time as a timezone-aware `DateTime<UTC>`.
+    #[pyo3(name = "utc_now")]
+    fn py_utc_now(&self) -> DateTime<Utc> {
+        self.0.borrow().utc_now()
+    }
+
+    /// Returns the names of active timers in the clock.
+    #[pyo3(name = "timer_names")]
+    fn py_timer_names(&self) -> Vec<String> {
+        self.0
+            .borrow()
+            .timer_names()
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
+
+    /// Returns the count of active timers in the clock.
+    #[pyo3(name = "timer_count")]
+    fn py_timer_count(&self) -> usize {
+        self.0.borrow().timer_count()
+    }
+
     #[pyo3(name = "register_default_handler")]
     fn py_register_default_handler(&mut self, callback: Py<PyAny>) {
         self.0
             .borrow_mut()
             .register_default_handler(TimeEventCallback::from(callback));
+    }
+
+    #[pyo3(name = "cancel_default_handler")]
+    fn py_cancel_default_handler(&mut self) {
+        self.0.borrow_mut().cancel_default_handler();
+    }
+
+    #[pyo3(name = "cancel_callbacks")]
+    fn py_cancel_callbacks(&mut self) {
+        self.0.borrow_mut().cancel_callbacks();
     }
 
     #[pyo3(
@@ -103,7 +162,7 @@ impl PyClock {
             .map_err(to_pyvalue_err)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[pyo3(
         name = "set_timer",
         signature = (name, interval, start_time=None, stop_time=None, callback=None, allow_past=None, fire_immediately=None)
@@ -121,6 +180,7 @@ impl PyClock {
         let interval_ns_i64 = interval
             .num_nanoseconds()
             .ok_or_else(|| to_pyvalue_err("Interval too large"))?;
+
         if interval_ns_i64 <= 0 {
             return Err(to_pyvalue_err("Interval must be positive"));
         }
@@ -140,7 +200,7 @@ impl PyClock {
             .map_err(to_pyvalue_err)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[pyo3(
         name = "set_timer_ns",
         signature = (name, interval_ns, start_time_ns=None, stop_time_ns=None, callback=None, allow_past=None, fire_immediately=None)

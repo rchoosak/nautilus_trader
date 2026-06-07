@@ -20,7 +20,7 @@
 //! active `LogGuard` instances, ensuring the logging thread completes all pending writes before
 //! termination.
 //!
-//! # LogGuard Reference Counting
+//! # `LogGuard` reference counting
 //!
 //! The logging system maintains a global count of active `LogGuard` instances using an atomic
 //! counter (`LOGGING_GUARDS_ACTIVE`). When a `LogGuard` is created, the counter is incremented,
@@ -157,14 +157,8 @@ pub fn logging_clock_set_static_time(time_ns: u64) {
 /// Logging can be configured to filter components and write up to a specific level only
 /// by passing a configuration using the `NAUTILUS_LOG` environment variable.
 ///
-/// # Safety
-///
 /// Should only be called once during an applications run, ideally at the
 /// beginning of the run.
-///
-/// Logging should be used for Python and sync Rust logic which is most of
-/// the components in the `nautilus_trader` package.
-/// Logging can be configured via the `NAUTILUS_LOG` environment variable.
 ///
 /// # Errors
 ///
@@ -215,6 +209,7 @@ pub fn parse_component_levels(
     match original_map {
         Some(map) => {
             let mut new_map = AHashMap::new();
+
             for (key, value) in map {
                 let ustr_key = Ustr::from(&key);
                 let s = value.as_str().ok_or_else(|| {

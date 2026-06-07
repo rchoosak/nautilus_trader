@@ -41,6 +41,7 @@ use crate::defi::pool_analysis::snapshot::PoolSnapshot;
 /// # Returns
 ///
 /// Returns `true` if all compared values match, `false` if any mismatches are detected.
+#[must_use]
 pub fn compare_pool_profiler(profiler: &PoolProfiler, snapshot: &PoolSnapshot) -> bool {
     assert!(profiler.is_initialized, "Profiler is not initialized");
 
@@ -99,9 +100,11 @@ pub fn compare_pool_profiler(profiler: &PoolProfiler, snapshot: &PoolSnapshot) -
 
     // Check ticks
     let mut tick_mismatches = 0;
+
     for tick in &snapshot.ticks {
         if let Some(profiler_tick) = profiler.get_tick(tick.value) {
             let mut all_tick_fields_matching = true;
+
             if profiler_tick.liquidity_net != tick.liquidity_net {
                 log::error!(
                     "Tick {} mismatch on net liquidity: profiler={}, compared={}",
@@ -111,6 +114,7 @@ pub fn compare_pool_profiler(profiler: &PoolProfiler, snapshot: &PoolSnapshot) -
                 );
                 all_tick_fields_matching = false;
             }
+
             if profiler_tick.liquidity_gross != tick.liquidity_gross {
                 log::error!(
                     "Tick {} mismatch on gross liquidity: profiler={}, compared={}",
@@ -141,6 +145,7 @@ pub fn compare_pool_profiler(profiler: &PoolProfiler, snapshot: &PoolSnapshot) -
 
     // Check positions
     let mut position_mismatches = 0;
+
     for position in &snapshot.positions {
         if let Some(profiler_position) =
             profiler.get_position(&position.owner, position.tick_lower, position.tick_upper)
@@ -150,6 +155,7 @@ pub fn compare_pool_profiler(profiler: &PoolProfiler, snapshot: &PoolSnapshot) -
                 position.tick_lower,
                 position.tick_upper,
             );
+
             if position.liquidity != profiler_position.liquidity {
                 log::error!(
                     "Position '{}' mismatch on liquidity: profiler={}, compared={}",

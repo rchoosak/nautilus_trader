@@ -19,7 +19,7 @@ use core::fmt::Debug;
 
 use nautilus_core::{
     env::resolve_env_var_pair,
-    string::{REDACTED, mask_api_key},
+    string::secret::{REDACTED, mask_api_key},
 };
 use zeroize::ZeroizeOnDrop;
 
@@ -77,7 +77,7 @@ impl Credential {
 
     /// Returns the API secret associated with this credential.
     ///
-    /// # Safety
+    /// # Security
     ///
     /// The secret should be handled carefully and never logged or exposed.
     #[must_use]

@@ -18,19 +18,19 @@
 use std::{any::Any, cell::RefCell, rc::Rc};
 
 use nautilus_common::{
-    cache::Cache,
+    cache::CacheView,
     clients::{DataClient, ExecutionClient},
     clock::Clock,
+    factories::{ClientConfig, DataClientFactory, ExecutionClientFactory},
 };
 use nautilus_live::ExecutionClientCore;
 use nautilus_model::{
     enums::{AccountType, OmsType},
     identifiers::{AccountId, ClientId, TraderId},
 };
-use nautilus_system::factories::{ClientConfig, DataClientFactory, ExecutionClientFactory};
 
 use crate::{
-    common::consts::BITMEX_VENUE,
+    common::consts::{BITMEX, BITMEX_VENUE},
     config::{BitmexDataClientConfig, BitmexExecClientConfig},
     data::BitmexDataClient,
     execution::BitmexExecutionClient,
@@ -47,6 +47,14 @@ impl ClientConfig for BitmexDataClientConfig {
 /// This wraps [`BitmexExecClientConfig`] with the additional trader and account
 /// identifiers required by the [`ExecutionClientCore`].
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bitmex", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.bitmex")
+)]
 pub struct BitmexExecFactoryConfig {
     /// The trader ID for the execution client.
     pub trader_id: TraderId,
@@ -78,7 +86,15 @@ impl ClientConfig for BitmexExecFactoryConfig {
 }
 
 /// Factory for creating BitMEX data clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bitmex", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.bitmex")
+)]
 pub struct BitmexDataClientFactory;
 
 impl BitmexDataClientFactory {
@@ -100,7 +116,7 @@ impl DataClientFactory for BitmexDataClientFactory {
         &self,
         name: &str,
         config: &dyn ClientConfig,
-        _cache: Rc<RefCell<Cache>>,
+        _cache: CacheView,
         _clock: Rc<RefCell<dyn Clock>>,
     ) -> anyhow::Result<Box<dyn DataClient>> {
         let bitmex_config = config
@@ -119,7 +135,7 @@ impl DataClientFactory for BitmexDataClientFactory {
     }
 
     fn name(&self) -> &'static str {
-        "BITMEX"
+        BITMEX
     }
 
     fn config_type(&self) -> &'static str {
@@ -128,7 +144,15 @@ impl DataClientFactory for BitmexDataClientFactory {
 }
 
 /// Factory for creating BitMEX execution clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.bitmex", from_py_object)
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.bitmex")
+)]
 pub struct BitmexExecutionClientFactory;
 
 impl BitmexExecutionClientFactory {
@@ -150,7 +174,7 @@ impl ExecutionClientFactory for BitmexExecutionClientFactory {
         &self,
         name: &str,
         config: &dyn ClientConfig,
-        cache: Rc<RefCell<Cache>>,
+        cache: CacheView,
     ) -> anyhow::Result<Box<dyn ExecutionClient>> {
         let factory_config = config
             .as_any()
@@ -181,7 +205,7 @@ impl ExecutionClientFactory for BitmexExecutionClientFactory {
     }
 
     fn name(&self) -> &'static str {
-        "BITMEX"
+        BITMEX
     }
 
     fn config_type(&self) -> &'static str {
