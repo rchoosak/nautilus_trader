@@ -205,6 +205,32 @@ def risk_based_lots(
     return max(size, min_qty)
 
 
+def risk_lots_for_stop(
+    equity: float,
+    *,
+    risk_pct: float,
+    stop_distance: float,
+    instrument: CurrencyPair,
+) -> Decimal:
+    """
+    Compute a position size (in lots) that risks ``risk_pct`` of ``equity`` for an explicit
+    stop distance (in price), e.g. from a swing-based stop-loss.
+
+    ``lots = (equity * risk_pct/100) / (stop_distance * contract_size)``, floored to the
+    instrument volume step and clamped to its minimum.
+    """
+    contract_size = Decimal(str(instrument.multiplier))
+    denominator = Decimal(str(stop_distance)) * contract_size
+    if denominator <= 0:
+        raise ValueError("Invalid stop distance / contract size for risk-based sizing")
+
+    lots = (Decimal(str(equity)) * Decimal(str(risk_pct)) / Decimal(100)) / denominator
+    step = instrument.size_increment.as_decimal()
+    size = (lots // step) * step
+    min_qty = instrument.min_quantity.as_decimal() if instrument.min_quantity is not None else step
+    return max(size, min_qty)
+
+
 def load_dukascopy_quote_ticks(
     source: str | PathLike[str] | pd.DataFrame,
     *,

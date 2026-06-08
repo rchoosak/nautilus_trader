@@ -24,6 +24,7 @@ from nautilus_trader.adapters.mt5.loaders import load_dukascopy_quote_ticks
 from nautilus_trader.adapters.mt5.loaders import mt5_fx_instrument
 from nautilus_trader.adapters.mt5.loaders import parse_trade_size_spec
 from nautilus_trader.adapters.mt5.loaders import risk_based_lots
+from nautilus_trader.adapters.mt5.loaders import risk_lots_for_stop
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.data import QuoteTick
@@ -166,6 +167,17 @@ def test_risk_based_lots_explicit_pip_size() -> None:
         pip_size=0.01,
     )
     assert lots == Decimal("5.00")
+
+
+def test_risk_lots_for_stop() -> None:
+    gold = mt5_fx_instrument("XAUUSD")  # contract 100
+    # 1% of 100k = 1000 risk; $20 stop x 100 contract = 2000/lot -> 0.50 lots.
+    assert risk_lots_for_stop(
+        100_000.0,
+        risk_pct=1.0,
+        stop_distance=20.0,
+        instrument=gold,
+    ) == Decimal("0.50")
 
 
 def test_risk_based_lots_jpy_pip_and_min_clamp() -> None:
